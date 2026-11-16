@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Territory</title>
+<style>
+  html,body{margin:0;height:100%;background:#0a0d12;color:#e8ecf3;font:14px system-ui,sans-serif;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none}
+  .panel{position:fixed;background:rgba(15,18,24,.88);border:1px solid #2a3140;border-radius:10px;padding:10px 12px}
+  #board{top:12px;right:12px;min-width:170px}
+  #board h4{margin:0 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8b95a8}
+  #board div{display:flex;align-items:center;gap:6px;padding:1px 0}
+  .dot{width:10px;height:10px;border-radius:3px;flex:none}
+  #board .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #hud{left:12px;bottom:12px;min-width:170px}
+  #me{font-weight:600;margin-bottom:4px}
+  #perk{color:#8b95a8;font-size:12px;max-width:200px}
+  #bar{width:100%;height:6px;background:#2a3140;border-radius:3px;margin-top:6px;overflow:hidden}
+  #bar i{display:block;height:100%;width:100%;background:#5aa9ff}
+  #msg{color:#ff8a7a;height:16px;margin-top:4px}
+  #fx{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+  .chip{display:flex;align-items:center;gap:6px;padding:3px 8px;border-radius:999px;font-weight:600;font-size:12px;border:1px solid}
+  #help{top:12px;left:12px;max-width:240px;color:#aab3c5;line-height:1.4;font-size:13px}
+  #help .k{display:block;margin-top:4px}
+  #toast{top:70px;left:50%;transform:translateX(-50%);font-weight:700;font-size:18px;display:none;white-space:nowrap}
+  #login{inset:0;margin:auto;width:310px;height:fit-content;text-align:center;max-height:96vh;overflow:auto}
+  #chars{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+  .ch{padding:8px 2px;border-radius:10px;cursor:pointer;border:2px solid #2a3140;background:#1a2030;font-size:28px;line-height:1.1}
+  .ch small{display:block;font-size:11px;color:#aab3c5;margin-top:2px}
+  .ch.sel{border-color:#5aa9ff;background:#202a40}
+  #perktext{margin-top:8px;color:#aab3c5;font-size:12px;min-height:30px}
+  #chat{left:50%;transform:translateX(-50%);bottom:12px;width:min(420px,50vw);padding:6px}
+  #chat input{width:100%;box-sizing:border-box;padding:7px;border-radius:6px;border:1px solid #2a3140;background:#1a2030;color:inherit;font:inherit}
+  #fortbtn{display:none;right:176px;bottom:50px;width:56px;height:56px;border-radius:50%;align-items:center;justify-content:center;font-size:26px;padding:0;user-select:none;touch-action:none;background:rgba(90,169,255,.25);border-color:#5aa9ff}
+  #pad{display:none;right:14px;bottom:14px;width:150px;height:150px;padding:0;background:none;border:0}
+  #pad b{position:absolute;width:48px;height:48px;border-radius:12px;background:rgba(90,169,255,.25);border:1px solid #5aa9ff;display:flex;align-items:center;justify-content:center;font-size:20px;user-select:none;touch-action:none}
+  @media (pointer:coarse){#pad{display:block}#fortbtn{display:flex}#chat{display:none}#help{display:none}}
+  #login input[type=text],#login button{width:100%;box-sizing:border-box;padding:9px;margin-top:8px;border-radius:6px;border:1px solid #2a3140;background:#1a2030;color:inherit;font:inherit}
+  #login button{background:#5aa9ff;color:#06101e;font-weight:600;cursor:pointer;border:0}
+  #pins div{position:fixed;transform:translate(-50%,-50%);width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.65);border:2px solid;display:flex;align-items:center;justify-content:center;font-size:18px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="pins"></div>
+<div id="help" class="panel"><b>Territory</b>
+<span class="k"><b>WASD / arrows</b> walk. Every tile you walk over becomes yours.</span>
+<span class="k">Walk over enemy land to take it. Shielded tiles are hit while you stand on them. <b>Space</b> fortifies the tiles around you (thicker white border = more shield).</span>
+<span class="k">Grab glowing <b>boosts</b>. They vanish in 15s! <b>Enter</b> chats.</span></div>
+<div id="board" class="panel"><h4>Leaders · <span id="online">0</span> online</h4><span id="rows"></span></div>
+<div id="hud" class="panel"><div id="me"></div><div id="perk"></div>
+  <div style="margin-top:6px">Your tiles: <b id="mine">0</b></div>
+  <div id="bar"><i id="fill"></i></div><div id="msg"></div><div id="fx"></div></div>
+<div id="toast" class="panel"></div>
+<div id="fortbtn" class="panel">🛡️</div>
+<div id="chat" class="panel"><input id="chatin" maxlength="80" placeholder="Press Enter to chat..."></div>
+<div id="pad" class="panel">
+  <b data-d="0,-1" style="left:51px;top:0">▲</b><b data-d="-1,0" style="left:0;top:51px">◀</b>
+  <b data-d="1,0" style="right:0;top:51px">▶</b><b data-d="0,1" style="left:51px;bottom:0">▼</b>
+</div>
+<div id="login" class="panel">
+  <h3 style="margin:0 0 4px">Join the world</h3>
+  <input id="name" type="text" maxlength="16" placeholder="Your name">
+  <div id="chars"></div>
+  <div id="perktext"></div>
+  <button id="go">Play</button>
+</div>
+<script src="three.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
