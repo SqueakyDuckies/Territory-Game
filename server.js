@@ -8,6 +8,9 @@ const { WebSocketServer } = require('ws');
 const W = 160, H = 160;          // world size in tiles
 const COOLDOWN_MS = 800;         // time between actions per player
 const MAX_DEF = 3;               // max fortification on a tile
+const SPEED = 5;                 // avatar speed, tiles per second
+const REACH = 6;                 // how far (tiles) your avatar can claim/attack
+const EMOJIS = ['🦊','🐸','🐱','🐼','🦄','🐙','🤖','👾','🐧','🐲'];
 const PORT = process.env.PORT || 3000;
 const SAVE_FILE = process.env.SAVE_FILE || path.join(__dirname, 'world.json');
 
@@ -21,7 +24,7 @@ let nextId = 1;
 function load() {
   try {
     const s = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
-    s.players.forEach(p => { players.set(p.id, { ...p, count: 0 }); tokens.set(p.token, p.id); });
+    s.players.forEach(p => { players.set(p.id, { ...p, count: 0, x: W / 2, y: H / 2, dx: 0, dy: 0, last: 0, online: 0 }); tokens.set(p.token, p.id); });
     nextId = s.nextId;
     owner.set(s.owner); def.set(s.def);
     owner.forEach(o => { if (o && players.has(o)) players.get(o).count++; });
@@ -31,7 +34,7 @@ function load() {
 function save() {
   const data = {
     nextId,
-    players: [...players.values()].map(({ id, token, name, hue }) => ({ id, token, name, hue })),
+    players: [...players.values()].map(({ id, token, name, hue, emoji }) => ({ id, token, name, hue, emoji })),
     owner: Array.from(owner), def: Array.from(def),
   };
   fs.writeFile(SAVE_FILE + '.tmp', JSON.stringify(data), err => {
@@ -41,7 +44,7 @@ function save() {
 load();
 setInterval(save, 30000);
 process.on('SIGINT', () => { fs.writeFileSync(SAVE_FILE, JSON.stringify({
-  nextId, players: [...players.values()].map(({ id, token, name, hue }) => ({ id, token, name, hue })),
+  nextId, players: [...players.values()].map(({ id, token, name, hue, emoji }) => ({ id, token, name, hue, emoji })),
   owner: Array.from(owner), def: Array.from(def) })); process.exit(); });
 
 // ---- HTTP (static files) ----
@@ -82,6 +85,7 @@ function setTile(x, y, o, d) {
 }
 
 function handleClick(p, x, y) {
+  if (Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y) > REACH) return 'Too far - walk closer';
   const i = idx(x, y), o = owner[i];
   if (o === p.id) { // fortify own tile
     if (def[i] >= MAX_DEF) return 'Already max fortified';
@@ -109,39 +113,74 @@ function leaderboard() {
     .sort((a, b) => b.count - a.count).slice(0, 10)
     .map(p => ({ id: p.id, name: p.name, hue: p.hue, count: p.count }));
 }
-setInterval(() => broadcast({ t: 'board', board: leaderboard(), online: wss.clients.size }), 2000);
+const online = () => [...players.values()].filter(p => p.online > 0);
+setInterval(() => broadcast({ t: 'board', board: leaderboard(), online: online().length }), 2000);
+
+// Movement tick (20/s) and position broadcast (10/s)
+const TICK = 50;
+let tickN = 0;
+setInterval(() => {
+  for (const p of online()) {
+    const len = Math.hypot(p.dx, p.dy);
+    if (len > 0) {
+      p.x = Math.max(0.5, Math.min(W - 0.5, p.x + (p.dx / len) * SPEED * TICK / 1000));
+      p.y = Math.max(0.5, Math.min(H - 0.5, p.y + (p.dy / len) * SPEED * TICK / 1000));
+    }
+  }
+  if (++tickN % 2 === 0) {
+    broadcast({ t: 'pos', p: online().map(p => [p.id, +p.x.toFixed(2), +p.y.toFixed(2)]) });
+  }
+}, TICK);
 
 const cleanName = s => String(s || '').replace(/[^\w \-.]/g, '').trim().slice(0, 16) || 'Player';
+const cleanChat = s => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 80);
 
 wss.on('connection', ws => {
-  let me = null, last = 0, msgs = 0;
+  let me = null, msgs = 0, lastChat = 0;
   const rl = setInterval(() => { msgs = 0; }, 1000);
-  ws.on('close', () => clearInterval(rl));
+  ws.on('close', () => {
+    clearInterval(rl);
+    if (me) { me.online--; if (me.online <= 0) { me.online = 0; me.dx = me.dy = 0; } }
+  });
   ws.on('message', raw => {
-    if (++msgs > 20 || raw.length > 512) return; // basic flood protection
+    if (++msgs > 30 || raw.length > 512) return; // basic flood protection
     let m; try { m = JSON.parse(raw); } catch { return; }
 
     if (m.t === 'join' && !me) {
-      let id = tokens.get(m.token);
+      const id = tokens.get(m.token);
       if (id) { me = players.get(id); me.name = cleanName(m.name); }
       else {
         const token = crypto.randomBytes(16).toString('hex');
-        me = { id: nextId++, token, name: cleanName(m.name), hue: Math.floor(Math.random() * 360), count: 0 };
+        me = {
+          id: nextId++, token, name: cleanName(m.name), hue: Math.floor(Math.random() * 360), count: 0,
+          x: 10 + Math.random() * (W - 20), y: 10 + Math.random() * (H - 20), dx: 0, dy: 0, last: 0, online: 0,
+        };
         players.set(me.id, me); tokens.set(token, me.id);
       }
+      me.emoji = EMOJIS.includes(m.emoji) ? m.emoji : (me.emoji || EMOJIS[me.id % EMOJIS.length]);
+      me.online++;
       send(ws, {
         t: 'init', you: me.id, token: me.token, w: W, h: H, cooldown: COOLDOWN_MS, maxDef: MAX_DEF,
+        speed: SPEED, reach: REACH, x: me.x, y: me.y,
         owner: Array.from(owner), def: Array.from(def),
-        players: Object.fromEntries([...players.values()].map(p => [p.id, { name: p.name, hue: p.hue }])),
+        players: Object.fromEntries([...players.values()].map(p => [p.id, { name: p.name, hue: p.hue, emoji: p.emoji }])),
       });
-      broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue });
+      broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue, emoji: me.emoji });
+    } else if (m.t === 'move' && me) {
+      me.dx = Math.max(-1, Math.min(1, Number(m.dx) || 0));
+      me.dy = Math.max(-1, Math.min(1, Number(m.dy) || 0));
+    } else if (m.t === 'chat' && me) {
+      const now = Date.now(), msg = cleanChat(m.msg);
+      if (!msg || now - lastChat < 1000) return;
+      lastChat = now;
+      broadcast({ t: 'chat', id: me.id, msg });
     } else if (m.t === 'click' && me) {
       const now = Date.now();
-      if (now - last < COOLDOWN_MS) return send(ws, { t: 'err', msg: 'Cooling down' });
+      if (now - me.last < COOLDOWN_MS) return send(ws, { t: 'err', msg: 'Cooling down' });
       if (!inBounds(m.x, m.y)) return;
       const err = handleClick(me, m.x, m.y);
       if (err) return send(ws, { t: 'err', msg: err });
-      last = now;
+      me.last = now;
       send(ws, { t: 'ok' });
     }
   });
