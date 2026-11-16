@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Territory</title>
+<style>
+  html,body{margin:0;height:100%;background:#0f1218;color:#e8ecf3;font:14px system-ui,sans-serif;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none;cursor:crosshair}
+  .panel{position:fixed;background:rgba(15,18,24,.88);border:1px solid #2a3140;border-radius:10px;padding:10px 12px}
+  #board{top:12px;right:12px;min-width:170px}
+  #board h4{margin:0 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8b95a8}
+  #board div{display:flex;align-items:center;gap:6px;padding:1px 0}
+  .dot{width:10px;height:10px;border-radius:3px;flex:none}
+  #board .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #hud{left:12px;bottom:12px}
+  #bar{width:140px;height:6px;background:#2a3140;border-radius:3px;margin-top:6px;overflow:hidden}
+  #bar i{display:block;height:100%;width:100%;background:#5aa9ff}
+  #msg{color:#ff8a7a;height:16px;margin-top:4px}
+  #help{top:12px;left:12px;max-width:230px;color:#aab3c5;line-height:1.4}
+  #login{inset:0;margin:auto;width:260px;height:fit-content;text-align:center}
+  #login input,#login button{width:100%;box-sizing:border-box;padding:9px;margin-top:8px;border-radius:6px;border:1px solid #2a3140;background:#1a2030;color:inherit;font:inherit}
+  #login button{background:#5aa9ff;color:#06101e;font-weight:600;cursor:pointer;border:0}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="help" class="panel"><b>Territory</b><br>
+Click an empty tile next to your land to claim it. Click your own tile to fortify it. Click an enemy tile to break its shield, then capture it. Drag to pan, scroll to zoom.</div>
+<div id="board" class="panel"><h4>Leaders · <span id="online">0</span> online</h4><span id="rows"></span></div>
+<div id="hud" class="panel">Your tiles: <b id="mine">0</b><div id="bar"><i id="fill"></i></div><div id="msg"></div></div>
+<div id="login" class="panel">
+  <h3 style="margin:0 0 4px">Join the world</h3>
+  <input id="name" maxlength="16" placeholder="Your name">
+  <button id="go">Play</button>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
