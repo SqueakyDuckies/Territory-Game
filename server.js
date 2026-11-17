@@ -5,13 +5,14 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 // ================= Config (tweak these to change the game feel) =================
-const W = 64, H = 64;            // world size in tiles (smaller = more fights)
+const Shared = require('./public/shared.js'); // maps + movement physics, same file the browser uses
+const W = Shared.W, H = Shared.H;  // world size in tiles (set in public/shared.js)
 const COOLDOWN_MS = 800;         // base time between attacks on shielded tiles and fortify presses
 const MIN_COOLDOWN_MS = 120;     // fastest possible attack/fortify rate
 const MAX_DEF = 3;               // max fortification on a tile
 const SPEED = 6.25;              // base walking speed, tiles per second (25% faster than before)
 const ROUND_MS = Number(process.env.ROUND_MS) || 60000;   // length of a round
-const RESULT_MS = Number(process.env.RESULT_MS) || 8000;  // how long the results screen shows between rounds
+const RESULT_MS = Number(process.env.RESULT_MS) || 12000; // results + map vote screen between rounds
 const PICKUP_LIFE_MS = 15000;    // how long a boost stays on the map before vanishing
 const BOOST_MS = 15000;          // how long a collected boost lasts
 const EXPLOSION_TILES = 15;      // tiles taken by the Explosion boost
@@ -35,6 +36,7 @@ const PICKUPS = {
   boom:    { name: 'Explosion',  icon: '💥', color: '#ff5a36', weight: 2, desc: `Instantly claims ${EXPLOSION_TILES} tiles around you, enemy tiles too` },
   breaker: { name: 'Breaker',    icon: '🔨', color: '#b06bff', weight: 2, desc: 'Walk over any enemy tile to capture it instantly, shields ignored' },
   haste:   { name: 'Haste',      icon: '🚀', color: '#3fe0ff', weight: 2, desc: 'Walk 60% faster' },
+  fortress:{ name: 'Fortress',   icon: '🛡️', color: '#4da3ff', weight: 2, desc: 'Tiles you claim start with 2 shields' },
 };
 const HASTE = 1.6, RAPID = 0.3;
 
@@ -45,7 +47,8 @@ const players = new Map();            // id -> player
 const tokens = new Map();             // token -> id
 let nextId = 1;
 
-const newPlayerState = () => ({ count: 0, x: W / 2, y: H / 2, dx: 0, dy: 0, last: 0, online: 0, fx: {}, socks: new Set() });
+const newPlayerState = () => ({ count: 0, x: W / 2, y: H / 2, dx: 0, dy: 0, kx: 0, ky: 0, tpUntil: 0, flingUntil: 0, last: 0, online: 0, fx: {}, socks: new Set() });
+const curMap = () => Shared.MAPS[round.mapId];
 const savable = () => ({
   nextId,
   players: [...players.values()].map(({ id, token, name, hue, char, wins }) => ({ id, token, name, hue, char, wins: wins || 0 })),
@@ -114,7 +117,7 @@ function stats(p) {
     speed: SPEED * (c.speed || 1) * (has('haste') ? HASTE : 1),
     brush: c.brush || 0,
     cd: Math.max(MIN_COOLDOWN_MS, COOLDOWN_MS * (c.cd || 1) * (has('rapid') ? RAPID : 1)),
-    startDef: c.startDef || 0, fortify: c.fortify || 1, hit: c.hit || 1, breaker: has('breaker'),
+    startDef: Math.min(MAX_DEF, (c.startDef || 0) + (has('fortress') ? 2 : 0)), fortify: c.fortify || 1, hit: c.hit || 1, breaker: has('breaker'),
   };
 }
 
@@ -142,8 +145,8 @@ function claimTile(p, x, y, st, primary, now) {
   setTile(x, y, o, Math.max(0, def[i] - st.hit));
   sendP(p, { t: 'ok', cd: st.cd });
 }
-function stepOn(p, now) {
-  const st = stats(p), tx = Math.floor(p.x), ty = Math.floor(p.y);
+function stepOn(p, now, x = p.x, y = p.y) {
+  const st = stats(p), tx = Math.floor(x), ty = Math.floor(y);
   if (p.count === 0) { // new (or wiped-out) players get a free 3x3 start where they stand
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const nx = tx + dx, ny = ty + dy;
@@ -191,6 +194,8 @@ function spawnPickups() {
   const ang = Math.random() * Math.PI * 2, dist = 5 + Math.random() * 12;
   const x = Math.max(1, Math.min(W - 1, target.x + Math.cos(ang) * dist));
   const y = Math.max(1, Math.min(H - 1, target.y + Math.sin(ang) * dist));
+  const mp = curMap();
+  if (mp.vortexes.some(v => Math.hypot(v.x - x, v.y - y) < 2.5) || mp.portals.some(po => Math.hypot(po.x - x, po.y - y) < 2)) return;
   const pk = { id: nextPickup++, type: pickType(), x: +x.toFixed(2), y: +y.toFixed(2), exp: Date.now() + PICKUP_LIFE_MS };
   pickups.set(pk.id, pk);
   broadcast({ t: 'pickup+', id: pk.id, type: pk.type, x: pk.x, y: pk.y, left: PICKUP_LIFE_MS });
@@ -224,26 +229,31 @@ function leaderboard() {
 setInterval(() => broadcast({ t: 'board', board: leaderboard(), online: online().length, n: round.n, phase: round.phase, left: (round.phase === 'play' ? round.endsAt : round.resultsUntil) - Date.now() }), 1000);
 
 // ================= Rounds: 60s of play, then a results screen, then a fresh map =================
-const round = { n: 1, phase: 'play', endsAt: Date.now() + ROUND_MS, resultsUntil: 0, results: null };
+const votes = new Map(); // playerId -> mapId, collected on the results screen
+const tally = () => { const c = Object.fromEntries(Shared.MAP_IDS.map(id => [id, 0])); votes.forEach(m => c[m]++); return c; };
+const round = { n: 1, mapId: Shared.MAP_IDS[0], phase: 'play', endsAt: Date.now() + ROUND_MS, resultsUntil: 0, results: null };
 let mapDirty = false;
 function resetMap() {
   owner.fill(0); def.fill(0); mapDirty = false; pickups.clear();
   players.forEach(p => { p.count = 0; p.fx = {}; p.dx = 0; p.dy = 0; p.last = 0; });
 }
 function startRound() {
+  const counts = tally(), max = Math.max(...Object.values(counts));
+  const cands = Shared.MAP_IDS.filter(id => max === 0 || counts[id] === max); // ties (or no votes) are settled randomly
+  round.mapId = cands[Math.floor(Math.random() * cands.length)]; votes.clear();
   resetMap(); round.n++; round.phase = 'play'; round.endsAt = Date.now() + ROUND_MS; round.results = null;
   for (const p of online()) {
-    p.x = 6 + Math.random() * (W - 12); p.y = 6 + Math.random() * (H - 12);
+    Object.assign(p, Shared.safeSpot(curMap()), { kx: 0, ky: 0, tpUntil: 0 });
     sendP(p, { t: 'spawn', x: p.x, y: p.y });
   }
-  broadcast({ t: 'round', n: round.n, left: ROUND_MS });
+  broadcast({ t: 'round', n: round.n, left: ROUND_MS, map: round.mapId, counts });
 }
 function endRound() {
   const ranked = [...players.values()].filter(p => p.count > 0).sort((a, b) => b.count - a.count);
   if (ranked[0]) ranked[0].wins = (ranked[0].wins || 0) + 1;
-  round.phase = 'results'; round.resultsUntil = Date.now() + RESULT_MS; pickups.clear();
+  votes.clear(); round.phase = 'results'; round.resultsUntil = Date.now() + RESULT_MS; pickups.clear();
   round.results = {
-    n: round.n, total: W * H,
+    n: round.n, total: W * H, mapId: round.mapId, counts: tally(),
     board: ranked.slice(0, 8).map(p => ({ id: p.id, name: p.name, hue: p.hue, count: p.count, wins: p.wins || 0 })),
   };
   for (const p of online()) {
@@ -270,13 +280,25 @@ let tickN = 0;
 setInterval(() => {
   const now = Date.now();
   for (const p of (round.phase === 'play' ? online() : [])) {
-    const len = Math.hypot(p.dx, p.dy);
-    if (len > 0) {
-      const sp = stats(p).speed;
-      p.x = Math.max(0.5, Math.min(W - 0.5, p.x + (p.dx / len) * sp * TICK / 1000));
-      p.y = Math.max(0.5, Math.min(H - 0.5, p.y + (p.dy / len) * sp * TICK / 1000));
+    const ox = p.x, oy = p.y, map = curMap();
+    const evs = Shared.step(map, p, TICK / 1000, p.dx, p.dy, stats(p).speed, now);
+    let teleported = false;
+    for (const ev of evs) {
+      if (ev.tp) { // portal: everyone sees the flash at both ends
+        teleported = true;
+        broadcast({ t: 'portalfx', from: { x: ev.tp.from.x, y: ev.tp.from.y }, to: { x: ev.tp.to.x, y: ev.tp.to.y }, color: ev.tp.from.color });
+      } else if (ev.fling && now >= p.flingUntil) { // vortex spits you out in a random direction
+        const ang = Math.random() * Math.PI * 2;
+        p.flingUntil = now + 800; p.kx = Math.cos(ang) * Shared.FLING; p.ky = Math.sin(ang) * Shared.FLING;
+        sendP(p, { t: 'fling', kx: p.kx, ky: p.ky });
+        broadcast({ t: 'vortexfx', x: ev.fling.x, y: ev.fling.y });
+      }
     }
-    stepOn(p, now);
+    if (teleported) stepOn(p, now);
+    else { // claim every tile along the path so fast movers never skip one
+      const n = Math.max(1, Math.ceil(Math.hypot(p.x - ox, p.y - oy) / 0.8));
+      for (let i = 1; i <= n; i++) stepOn(p, now, ox + (p.x - ox) * i / n, oy + (p.y - oy) * i / n);
+    }
     for (const pk of pickups.values()) {
       if (Math.hypot(pk.x - p.x, pk.y - p.y) < 1.0) { collect(p, pk); }
     }
@@ -313,11 +335,12 @@ wss.on('connection', ws => {
         const token = crypto.randomBytes(16).toString('hex');
         me = {
           id: nextId++, token, name: cleanName(m.name), hue: Math.floor(Math.random() * 360), char: 'fox',
-          ...newPlayerState(), x: 10 + Math.random() * (W - 20), y: 10 + Math.random() * (H - 20),
+          ...newPlayerState(), ...Shared.safeSpot(curMap()),
         };
         players.set(me.id, me); tokens.set(token, me.id);
       }
       me.char = CHARS[m.char] ? m.char : (CHARS[me.char] ? me.char : CHAR_KEYS[me.id % CHAR_KEYS.length]);
+      if (!me.online) Object.assign(me, Shared.safeSpot(curMap()), { kx: 0, ky: 0, tpUntil: 0 });
       me.online++; me.socks.add(ws);
       send(ws, {
         t: 'init', you: me.id, token: me.token, w: W, h: H, char: me.char, x: me.x, y: me.y,
@@ -326,7 +349,7 @@ wss.on('connection', ws => {
         pickups: [...pickups.values()].map(k => ({ id: k.id, type: k.type, x: k.x, y: k.y, left: k.exp - Date.now() })),
         fx: Object.fromEntries(online().map(p => [p.id, fxMsg(p).fx])),
         round: { n: round.n, phase: round.phase, left: (round.phase === 'play' ? round.endsAt : round.resultsUntil) - Date.now() },
-        results: round.phase === 'results' ? round.results : null,
+        results: round.phase === 'results' ? round.results : null, map: round.mapId, votes: tally(),
       });
       broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue, char: me.char });
     } else if (m.t === 'move' && me) {
@@ -337,6 +360,9 @@ wss.on('connection', ws => {
       if (!msg || now - lastChat < 1000) return;
       lastChat = now;
       broadcast({ t: 'chat', id: me.id, msg });
+    } else if (m.t === 'vote' && me) {
+      if (round.phase !== 'results' || !Shared.MAPS[m.map]) return;
+      votes.set(me.id, m.map); broadcast({ t: 'votes', counts: tally() });
     } else if (m.t === 'fort' && me) {
       const err = fortify(me, Date.now());
       if (err) send(ws, { t: 'err', msg: err });
