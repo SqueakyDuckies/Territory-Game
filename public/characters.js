@@ -150,6 +150,78 @@
       C.legL = leg(C.rig, -0.14, C.hip, 0.07, or, or, 0.2); C.legR = leg(C.rig, 0.14, C.hip, 0.07, or, or, 0.2);
       C.style = { legAmp: 0.45, armAmp: 0.2, bob: 0.05, lean: 0.04, twist: 0.05, roll: 0.2, squash: 0.2, tail: 0, ear: 0, cadence: 1.0, flap: true };
     },
+    rabbit(C) {
+      const f = L(0xf0ebe3), w = L(0xffffff), pk = L(0xffb3c7);
+      C.hip = 0.36; C.neckY = 0.5; C.neckR = 0.27;
+      at(ell(0.28, 0.27, 0.24, f, true), 0, 0.22, 0, C.upper); at(ell(0.18, 0.2, 0.1, w), 0, 0.2, 0.16, C.upper);
+      const h = C.head = pv(0, 0.5, 0, C.upper);
+      at(ell(0.38, 0.33, 0.33, f, true), 0, 0.27, 0, h);
+      at(ell(0.13, 0.1, 0.11, w), 0, 0.15, 0.27, h); at(ell(0.05, 0.035, 0.035, pk), 0, 0.2, 0.37, h); at(bx(0.07, 0.07, 0.02, w), 0, 0.09, 0.37, h);
+      at(ell(0.12, 0.1, 0.1, f), -0.2, 0.13, 0.2, h); at(ell(0.12, 0.1, 0.1, f), 0.2, 0.13, 0.2, h);
+      eye(C, h, -0.15, 0.33, 0.27, 0.065); eye(C, h, 0.15, 0.33, 0.27, 0.065);
+      for (const s of [-1, 1]) { const e = pv(0.14 * s, 0.5, -0.02, h); e.rotation.z = -0.12 * s; e.userData.bz = e.rotation.z; at(ell(0.09, 0.42, 0.055, f, true), 0, 0.36, 0, e); at(ell(0.05, 0.32, 0.03, pk), 0, 0.34, 0.035, e); C.ears.push(e); }
+      C.tail = pv(0, 0.14, -0.22, C.upper); C.tailBase = 0; at(ell(0.15, 0.15, 0.15, w, true), 0, 0, -0.1, C.tail);
+      C.armL = arm(C.upper, -0.28, 0.36, 0.26, 0.075, f, w); C.armR = arm(C.upper, 0.28, 0.36, 0.26, 0.075, f, w);
+      C.legL = leg(C.rig, -0.14, C.hip, 0.1, f, w, 0.24); C.legR = leg(C.rig, 0.14, C.hip, 0.1, f, w, 0.24);
+      C.style = { legAmp: 0.95, armAmp: 0.7, bob: 0.17, lean: 0.14, twist: 0.1, roll: 0.02, squash: 0.28, tail: 0.6, ear: 1.7, cadence: 1.0 };
+    },
+    octopus(C) {
+      const p = L(0x9b6bd6), dp = L(0x7a4fb5), lp = L(0xc7a3f0), k = L(0x111111), wh = L(0xffffff);
+      C.hip = 0.3; C.neckY = 0.4; C.neckR = 0.3;
+      at(ell(0.3, 0.22, 0.26, p, true), 0, 0.17, 0, C.upper);
+      const h = C.head = pv(0, 0.36, 0, C.upper);
+      at(ell(0.46, 0.46, 0.42, p, true), 0, 0.3, 0, h);
+      for (const [x, y, z, r] of [[0.1, 0.7, 0.1, 0.08], [-0.15, 0.66, -0.05, 0.06], [0.2, 0.6, 0.0, 0.05], [-0.05, 0.72, -0.12, 0.05], [-0.25, 0.55, 0.1, 0.05]]) at(ell(r, r * 0.6, r, lp), x, y, z, h);
+      for (const s of [-1, 1]) { const e = pv(0.18 * s, 0.26, 0.36, h); at(ell(0.1, 0.11, 0.06, wh), 0, 0, 0, e); at(ell(0.055, 0.065, 0.04, k), 0, 0, 0.04, e); at(ell(0.02, 0.02, 0.015, B(0xffffff)), 0.02, 0.03, 0.07, e); C.eyes.push(e); }
+      at(ell(0.08, 0.03, 0.03, dp), 0, 0.1, 0.4, h);
+      C.armL = arm(C.upper, -0.32, 0.22, 0.3, 0.09, p, lp); C.armR = arm(C.upper, 0.32, 0.22, 0.3, 0.09, p, lp);
+      C.legL = leg(C.rig, -0.15, C.hip, 0.1, p, lp, 0.14); C.legR = leg(C.rig, 0.15, C.hip, 0.1, p, lp, 0.14);
+      C.tail = pv(0, 0.12, -0.1, C.upper); C.tailBase = 0.2; // four more tentacles that wave behind
+      [[-0.3, 0.5], [0.3, -0.5], [-0.12, 0.2], [0.12, -0.2]].forEach(([x, rz]) => { const t = at(cone(0.1, 0.55, p, true), x, 0, -0.1, C.tail); t.rotation.set(-1.35, 0, rz); });
+      C.style = { legAmp: 0.6, armAmp: 0.8, bob: 0.07, lean: 0.06, twist: 0.2, roll: 0.1, squash: 0.3, tail: 1.7, ear: 0, cadence: 1.0 };
+    },
+    dragon(C) {
+      const g = L(0x3fa66b), dg = L(0x2d8052), bel = L(0xf2d98a), horn = L(0xf4ecd0), red = L(0xd9475a), k = L(0x111111);
+      C.hip = 0.36; C.neckY = 0.5; C.neckR = 0.28;
+      at(ell(0.32, 0.3, 0.27, g, true), 0, 0.22, 0, C.upper); at(ell(0.2, 0.24, 0.12, bel), 0, 0.2, 0.17, C.upper);
+      for (let i = 0; i < 4; i++) { const sp = at(cone(0.06, 0.17, dg), 0, 0.42 - i * 0.1, -0.2 - i * 0.015, C.upper); sp.rotation.x = -0.9; }
+      const h = C.head = pv(0, 0.5, 0, C.upper);
+      at(ell(0.38, 0.32, 0.34, g, true), 0, 0.27, 0, h); at(ell(0.2, 0.14, 0.2, g, true), 0, 0.15, 0.33, h);
+      at(ell(0.025, 0.02, 0.02, k), -0.06, 0.19, 0.5, h); at(ell(0.025, 0.02, 0.02, k), 0.06, 0.19, 0.5, h);
+      eye(C, h, -0.16, 0.34, 0.27, 0.06, 0xffc42e); eye(C, h, 0.16, 0.34, 0.27, 0.06, 0xffc42e);
+      for (const s of [-1, 1]) { const hn = at(cone(0.06, 0.34, horn, true), 0.17 * s, 0.56, -0.02, h); hn.rotation.set(-0.5, 0, -0.35 * s); }
+      C.wings = [-1, 1].map(s => { const wp = pv(0.2 * s, 0.45, -0.2, C.upper); wp.userData.s = s;
+        const bone = at(cone(0.045, 0.62, dg), 0.31 * s, 0.05, 0, wp); bone.rotation.z = -Math.PI / 2 * s;
+        at(bx(0.6, 0.02, 0.42, red), 0.32 * s, 0, -0.12, wp); at(bx(0.3, 0.02, 0.3, red), 0.2 * s, 0, -0.3, wp); return wp; });
+      C.tail = pv(0, 0.12, -0.22, C.upper); C.tailBase = 0.35;
+      at(ell(0.15, 0.14, 0.28, g, true), 0, 0, -0.25, C.tail); at(cone(0.05, 0.14, dg), 0, 0.14, -0.2, C.tail);
+      C.tail2 = pv(0, 0, -0.5, C.tail); at(ell(0.1, 0.1, 0.24, g, true), 0, 0, -0.2, C.tail2); at(cone(0.11, 0.22, red), 0, 0, -0.46, C.tail2).rotation.x = -Math.PI / 2;
+      C.armL = arm(C.upper, -0.34, 0.36, 0.28, 0.09, g, horn); C.armR = arm(C.upper, 0.34, 0.36, 0.28, 0.09, g, horn);
+      C.legL = leg(C.rig, -0.15, C.hip, 0.11, dg, horn, 0.18); C.legR = leg(C.rig, 0.15, C.hip, 0.11, dg, horn, 0.18);
+      C.sparkleColor = 0xff9a3d;
+      C.style = { legAmp: 0.8, armAmp: 0.7, bob: 0.1, lean: 0.14, twist: 0.14, roll: 0.04, squash: 0.2, tail: 1.2, ear: 0, cadence: 1.0 };
+    },
+    unicorn(C) {
+      const w = L(0xfdfbff), pink = L(0xffb8e6), gold = L(0xffd23f), M = [0xff8ad8, 0xb98cff, 0x7fd6ff, 0xfff08a, 0x9dffb0].map(c => L(c));
+      C.hip = 0.36; C.neckY = 0.5; C.neckR = 0.27;
+      at(ell(0.3, 0.27, 0.25, w, true), 0, 0.22, 0, C.upper);
+      at(ell(0.1, 0.1, 0.1, M[0]), 0, 0.42, -0.2, C.upper); at(ell(0.1, 0.1, 0.1, M[1]), 0, 0.3, -0.26, C.upper);
+      const h = C.head = pv(0, 0.5, 0, C.upper);
+      at(ell(0.38, 0.33, 0.34, w, true), 0, 0.27, 0, h); at(ell(0.16, 0.12, 0.14, pink), 0, 0.14, 0.29, h);
+      at(ell(0.02, 0.02, 0.02, L(0x7a3b6a)), -0.05, 0.16, 0.42, h); at(ell(0.02, 0.02, 0.02, L(0x7a3b6a)), 0.05, 0.16, 0.42, h);
+      eye(C, h, -0.15, 0.32, 0.28, 0.07, 0x3b2a6b); eye(C, h, 0.15, 0.32, 0.28, 0.07, 0x3b2a6b);
+      const hr = at(cone(0.07, 0.44, gold, true), 0, 0.68, 0.12, h); hr.rotation.x = 0.28;
+      at(ell(0.08, 0.02, 0.08, L(0xffe680)), 0, 0.56, 0.1, h); at(ell(0.065, 0.02, 0.065, L(0xffe680)), 0, 0.64, 0.12, h);
+      for (const s of [-1, 1]) ear(C, h, s, 0.2, 0.5, -0.05, -0.2, [0.08, 0.2], w, pink);
+      at(ell(0.13, 0.1, 0.1, M[0]), 0, 0.52, 0.22, h);
+      [[0.5, -0.2, 1], [0.4, -0.27, 2], [0.28, -0.3, 3], [0.17, -0.27, 4]].forEach(([y, z, i]) => at(ell(0.1, 0.11, 0.1, M[i % 5]), 0, y, z, h));
+      C.tail = pv(0, 0.14, -0.22, C.upper); C.tailBase = 0.65;
+      [[0.0, -0.1, 0], [-0.06, -0.3, 1], [-0.14, -0.5, 2], [-0.24, -0.66, 3]].forEach(([y, z, i]) => at(ell(0.13 - i * 0.012, 0.13 - i * 0.012, 0.2, M[i]), 0, y, z, C.tail));
+      C.armL = arm(C.upper, -0.29, 0.36, 0.27, 0.075, w, gold); C.armR = arm(C.upper, 0.29, 0.36, 0.27, 0.075, w, gold);
+      C.legL = leg(C.rig, -0.14, C.hip, 0.1, w, gold, 0.17); C.legR = leg(C.rig, 0.14, C.hip, 0.1, w, gold, 0.17);
+      C.sparkleColor = 0xfff08a;
+      C.style = { legAmp: 0.9, armAmp: 0.75, bob: 0.12, lean: 0.15, twist: 0.12, roll: 0.03, squash: 0.2, tail: 1.6, ear: 1, cadence: 1.1 };
+    },
   };
 
   window.makeCharacter = function (type, hue, lean) {
@@ -170,6 +242,7 @@
     const shadow = new T.Mesh(new T.CircleGeometry(0.62, 20), B(0x000000, { transparent: true, opacity: 0.3, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.03; root.add(shadow);
     C.aura = aura; C.shadow = shadow;
+    if (C.sparkleColor) C.sparkles = [0, 1, 2, 3].map(() => { const m = new T.Mesh(new T.SphereGeometry(0.05, 6, 5), B(C.sparkleColor)); tilt.add(m); return m; }); // OP characters glitter
     return C;
   };
 
@@ -244,6 +317,9 @@
     if (C.antenna) { C.antenna.rotation.x = Math.sin(an.phase * 2 + 0.5) * 0.22 * m - an.sqv * 0.04; C.antenna.rotation.z = Math.sin(now / 420 + sd) * 0.06; }
     C.scarfTail.rotation.x = 0.25 + m * 0.5 + Math.sin(an.phase * 2 + 1) * 0.15 * m + Math.sin(now / 350 + sd) * 0.05;
     C.scarfTail.rotation.y = an.turn * 1.2;
+
+    if (C.wings) C.wings.forEach(w => { w.rotation.z = w.userData.s * (0.55 + Math.sin(an.phase * 2) * 0.4 * m + Math.sin(now / 480 + sd) * 0.09); }); // wings flap with every step
+    if (C.sparkles) C.sparkles.forEach((sp, i) => { const a = now / 700 + i * 1.57; sp.position.set(Math.cos(a) * 0.85, 1.15 + Math.sin(now / 450 + i) * 0.25, Math.sin(a) * 0.7); sp.scale.setScalar(0.7 + Math.abs(Math.sin(now / 300 + i)) * 0.7); });
 
     // blinking
     if (now > an.nextBlink) { an.blink = 0.13; an.nextBlink = now + 1800 + Math.random() * 4200; }

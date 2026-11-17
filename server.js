@@ -39,16 +39,46 @@ const EXPLOSION_TILES = 15;      // tiles taken by the Explosion boost
 const PORT = process.env.PORT || 3000;
 const SAVE_FILE = process.env.SAVE_FILE || path.join(__dirname, 'world.json');
 
-// Characters, each with a built-in perk (multipliers / bonuses)
+// ---- Progression ----
+// Everyone starts with the 3 "starter" characters. Winning a round (with 2+ real players) earns 1 win. Wins are a currency:
+// spend 5 for a Good character, 10 for a Great one, 20 for an OP one. Unlocks are permanent.
+const MIN_PLAYERS_FOR_WIN = Number(process.env.MIN_PLAYERS) || 2; // a solo round earns nothing
+const MIN_TILES_TO_COUNT = 20;                                    // you must actually play (claim 20+ tiles) to count as a player
+const TIERS = {
+  starter: { label: 'Starter', cost: 0 },
+  good:    { label: 'Good',    cost: 5 },
+  great:   { label: 'Great',   cost: 10 },
+  op:      { label: 'OP',      cost: 20 },
+};
+// Active abilities (press Q). Great and OP characters have one.
+const ABILITIES = {
+  leap:      { name: 'Leap',      icon: '💨', cd: 9000,  dur: 1000, mult: 2.2, desc: 'Burst forward at 2.2x speed for 1 second' },
+  blink:     { name: 'Blink',     icon: '✨', cd: 5500,  dist: 6.5,              desc: 'Teleport 6.5 tiles ahead, claiming what you cross' },
+  shockwave: { name: 'Shockwave', icon: '🌀', cd: 14000, radius: 4.5, dmg: 2,    desc: 'Smash 2 shields off every enemy tile within 4.5 tiles' },
+  inferno:   { name: 'Inferno',   icon: '🔥', cd: 12000, radius: 3.2, dmg: 3,    desc: 'Burn everything within 3 tiles: claim it, or break 3 shields' },
+};
+// Characters. Stats: speed (walk multiplier), cd (attack/fortify cooldown multiplier), startDef (shields on tiles you claim),
+// fortify (shields per Space press), fortRadius, hit (shields removed per attack), brush (1 = paint a plus shape),
+// magnet (pickup grab range multiplier), fxMult (how long boosts last)
 const CHARS = {
-  fox:     { name: 'Fox',     icon: '🦊', perk: 'Swift: walks 30% faster', speed: 1.3 },
-  cat:     { name: 'Cat',     icon: '🐱', perk: 'Quick Paws: attacks & fortifies 30% faster', cd: 0.7 },
-  frog:    { name: 'Frog',    icon: '🐸', perk: 'Wide Paint: claims a plus-shaped patch (5 tiles) as you walk', brush: 1 },
-  panda:   { name: 'Panda',   icon: '🐼', perk: 'Sturdy: tiles you claim start with 1 shield', startDef: 1 },
-  robot:   { name: 'Robot',   icon: '🤖', perk: 'Overclock: Space fortify adds 2 shields per tile', fortify: 2 },
-  penguin: { name: 'Penguin', icon: '🐧', perk: 'Ice Breaker: each hit removes 2 shields', hit: 2 },
+  // --- starters: small, simple perks ---
+  fox:     { tier: 'starter', name: 'Fox',     icon: '🦊', perk: 'Swift: +12% walk speed', speed: 1.12 },
+  cat:     { tier: 'starter', name: 'Cat',     icon: '🐱', perk: 'Quick Paws: attacks & fortifies 20% faster', cd: 0.8 },
+  robot:   { tier: 'starter', name: 'Robot',   icon: '🤖', perk: 'Overclock: Space fortifies 5x5 for +2 shields; attacks 10% faster; +8% walk speed', fortify: 2, fortRadius: 2, cd: 0.9, speed: 1.08 },
+  // --- good (5 wins) ---
+  panda:   { tier: 'good', name: 'Panda',   icon: '🐼', perk: 'Sturdy: tiles you claim start with 1 shield (walks 12% slower)', startDef: 1, speed: 0.88 },
+  penguin: { tier: 'good', name: 'Penguin', icon: '🐧', perk: 'Ice Breaker: each hit removes 2 shields; tiles you capture from others start with 1 shield; attacks 20% faster; +12% walk speed', hit: 2, captureDef: 1, cd: 0.8, speed: 1.12 },
+  rabbit:  { tier: 'good', name: 'Rabbit',  icon: '🐰', perk: 'Hopper: +30% walk speed; grabs pickups from 2.5x as far; boosts last 30% longer', speed: 1.3, magnet: 2.5, fxMult: 1.3 },
+  // --- great (10 wins): a real perk plus an ability ---
+  frog:    { tier: 'great', name: 'Frog',    icon: '🐸', perk: 'Wide Paint: paints a plus-shaped patch as you walk (the centre tile starts with 1 shield); walks 20% slower', brush: 1, startDef: 1, speed: 0.8, ability: 'leap' },
+  octopus: { tier: 'great', name: 'Octopus', icon: '🐙', perk: 'Eight Arms: hits remove 2 shields; tiles start with 1 shield; attacks 15% faster', hit: 2, startDef: 1, cd: 0.85, ability: 'shockwave' },
+  // --- OP (20 wins) ---
+  dragon:  { tier: 'op', name: 'Dragon',  icon: '🐲', perk: 'Dragonfire: +15% speed; tiles start with 1 shield; hits remove 2 shields', speed: 1.15, startDef: 1, hit: 2, ability: 'inferno' },
+  unicorn: { tier: 'op', name: 'Unicorn', icon: '🦄', perk: 'Rainbow Rider: +25% speed; boosts last 50% longer; tiles start with 1 shield', speed: 1.25, fxMult: 1.5, startDef: 1, ability: 'blink' },
 };
 const CHAR_KEYS = Object.keys(CHARS);
+const STARTERS = CHAR_KEYS.filter(k => CHARS[k].tier === 'starter');
+const costOf = k => TIERS[CHARS[k].tier].cost;
 
 // Boosts that appear on the map
 const PICKUPS = {
@@ -57,6 +87,7 @@ const PICKUPS = {
   breaker: { name: 'Breaker',    icon: '🔨', color: '#b06bff', weight: 2, desc: 'Walk over any enemy tile to capture it instantly, shields ignored' },
   haste:   { name: 'Haste',      icon: '🚀', color: '#3fe0ff', weight: 2, desc: 'Walk 60% faster' },
   fortress:{ name: 'Fortress',   icon: '🛡️', color: '#4da3ff', weight: 2, desc: 'Tiles you claim start with 2 shields' },
+  leap:    { name: 'Leap',       icon: '💨', color: '#9be8ff', weight: 0, dur: 1000, desc: 'Speeding along!' }, // not a pickup: it's what the Leap ability turns on
 };
 const HASTE = 1.6, RAPID = 0.3;
 
@@ -67,17 +98,21 @@ const players = new Map();            // id -> player
 const tokens = new Map();             // token -> id
 let nextId = 1;
 
-const newPlayerState = () => ({ count: 0, x: W / 2, y: H / 2, dx: 0, dy: 0, kx: 0, ky: 0, tpUntil: 0, flingUntil: 0, last: 0, online: 0, fx: {}, socks: new Set() });
+const newPlayerState = () => ({ count: 0, x: W / 2, y: H / 2, dx: 0, dy: 0, fdx: 0, fdy: 1, kx: 0, ky: 0, tpUntil: 0, flingUntil: 0, last: 0, abAt: 0, online: 0, fx: {}, socks: new Set() });
+const UNLOCK_ALL = !!process.env.UNLOCK_ALL; // testing only
+const newProg = () => ({ wins: 0, total: 0, ver: 0, owned: new Set(UNLOCK_ALL ? CHAR_KEYS : STARTERS) }); // wins = what you can still spend, total = ever won
 const curMap = () => Shared.MAPS[round.mapId];
 const savable = () => ({
   nextId,
-  players: [...players.values()].map(({ id, token, name, hue, char, wins }) => ({ id, token, name, hue, char, wins: wins || 0 })),
+  players: [...players.values()].map(({ id, token, name, hue, char, wins, total, ver, owned }) => ({ id, token, name, hue, char, wins: wins || 0, total: total || 0, ver: ver || 0, owned: [...owned] })),
 });
 function load() {
   try {
     const sv = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
     sv.players.forEach(p => {
-      players.set(p.id, { ...p, char: CHARS[p.char] ? p.char : CHAR_KEYS[p.id % CHAR_KEYS.length], ...newPlayerState() });
+      const total = p.total === undefined ? (p.wins || 0) : p.total; // older save files only knew "wins"
+      players.set(p.id, { ...p, ...newProg(), wins: p.wins || 0, total, ver: p.ver || 0, owned: new Set([...STARTERS, ...(p.owned || []).filter(k => CHARS[k])]),
+        char: CHARS[p.char] ? p.char : STARTERS[0], ...newPlayerState() });
       tokens.set(p.token, p.id);
     });
     nextId = sv.nextId;
@@ -89,13 +124,31 @@ function save() {
     if (!err) fs.rename(SAVE_FILE + '.tmp', SAVE_FILE, () => {});
   });
 }
+// A signed "save" is handed to each player's browser. It proves how many wins / unlocks they have, so progress survives the
+// server restarting or sleeping (Render's free tier forgets files). Set SAVE_SECRET in Render's Environment tab to make it unforgeable.
+const SECRET = process.env.SAVE_SECRET || 'territory-save-secret-please-set-SAVE_SECRET';
+if (!process.env.SAVE_SECRET) console.error('NOTE: SAVE_SECRET is not set. Player saves work, but anyone who reads this code could forge one. Set SAVE_SECRET in your host\'s environment settings.');
+const mac = b => crypto.createHmac('sha256', SECRET).update(b).digest('base64url');
+const makeSave = p => { const b = Buffer.from(JSON.stringify({ v: 1, ver: p.ver, wins: p.wins, total: p.total, owned: [...p.owned] })).toString('base64url'); return b + '.' + mac(b); };
+function readSave(s) {
+  if (typeof s !== 'string' || s.length > 1500) return null;
+  const [b, m] = s.split('.'); if (!b || !m) return null;
+  const want = mac(b); if (want.length !== m.length || !crypto.timingSafeEqual(Buffer.from(want), Buffer.from(m))) return null;
+  try {
+    const d = JSON.parse(Buffer.from(b, 'base64url').toString());
+    if (![d.ver, d.wins, d.total].every(n => Number.isInteger(n) && n >= 0 && n < 1e6) || !Array.isArray(d.owned)) return null;
+    return { ver: d.ver, wins: d.wins, total: d.total, owned: new Set([...STARTERS, ...d.owned.filter(k => CHARS[k])]) };
+  } catch { return null; }
+}
+const progMsg = p => ({ t: 'prog', wins: p.wins, total: p.total, owned: [...p.owned], char: p.char, save: makeSave(p) });
+const pushProg = p => sendP(p, progMsg(p));
 load();
 setInterval(save, 30000);
 process.on('SIGINT', () => { fs.writeFileSync(SAVE_FILE, JSON.stringify(savable())); process.exit(); });
 
 // ================= HTTP (static files + config) =================
 const CONFIG = {
-  chars: CHARS, pickups: PICKUPS,
+  chars: CHARS, pickups: PICKUPS, tiers: TIERS, abilities: ABILITIES, minPlayers: MIN_PLAYERS_FOR_WIN,
   base: { speed: SPEED, cd: COOLDOWN_MS, minCd: MIN_COOLDOWN_MS },
   haste: HASTE, rapid: RAPID, pickupLife: PICKUP_LIFE_MS, boostMs: BOOST_MS, roundMs: ROUND_MS,
 };
@@ -136,10 +189,10 @@ const touches = (id, x, y) => DIRS.some(([dx, dy]) => {
 function stats(p) {
   const c = CHARS[p.char], now = Date.now(), has = t => (p.fx[t] || 0) > now;
   return {
-    speed: SPEED * (c.speed || 1) * (has('haste') ? HASTE : 1),
-    brush: c.brush || 0,
+    speed: SPEED * (c.speed || 1) * (has('haste') ? HASTE : 1) * (has('leap') ? ABILITIES.leap.mult : 1),
+    brush: c.brush || 0, fortRadius: c.fortRadius || 1, magnet: c.magnet || 1,
     cd: Math.max(MIN_COOLDOWN_MS, COOLDOWN_MS * (c.cd || 1) * (has('rapid') ? RAPID : 1)),
-    startDef: Math.min(MAX_DEF, (c.startDef || 0) + (has('fortress') ? 2 : 0)), fortify: c.fortify || 1, hit: c.hit || 1, breaker: has('breaker'),
+    startDef: Math.min(MAX_DEF, (c.startDef || 0) + (has('fortress') ? 2 : 0)), fxDef: has('fortress') ? 2 : 0, captureDef: c.captureDef || 0, fortify: c.fortify || 1, hit: c.hit || 1, breaker: has('breaker'),
   };
 }
 
@@ -161,7 +214,9 @@ function claimTile(p, x, y, st, primary, now) {
   if (o === p.id) return;
   const holder = o ? players.get(o) : null; // the owner standing on their tile holds it - nobody can take or hit it
   if (holder && holder.online > 0 && Math.floor(holder.x) === x && Math.floor(holder.y) === y) return;
-  if (o === 0 || def[i] === 0 || st.breaker) { setTile(x, y, p.id, st.startDef); return; }
+  if (o === 0 || def[i] === 0 || st.breaker) { // free claim. A brush's side tiles only get the boost shield; capturing from someone may give a shield too
+    setTile(x, y, p.id, !primary ? st.fxDef : (o !== 0 ? Math.max(st.startDef, st.captureDef) : st.startDef)); return;
+  }
   if (!primary || now - p.last < st.cd) return;
   p.last = now;
   setTile(x, y, o, Math.max(0, def[i] - st.hit));
@@ -183,8 +238,8 @@ function fortify(p, now) {
   if (round.phase !== 'play') return 'Round over';
   const st = stats(p), tx = Math.floor(p.x), ty = Math.floor(p.y);
   if (now - p.last < st.cd) return 'Cooling down';
-  let n = 0;
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+  let n = 0; const R = st.fortRadius;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
     const x = tx + dx, y = ty + dy;
     if (!inBounds(x, y)) continue;
     const i = idx(x, y);
@@ -195,13 +250,47 @@ function fortify(p, now) {
   sendP(p, { t: 'ok', cd: st.cd });
 }
 
+// ---- Abilities (Q) ----
+function eachTileNear(p, r, fn) { // every non-lane tile whose centre is within r of the player
+  for (let y = Math.floor(p.y - r); y <= Math.ceil(p.y + r); y++) for (let x = Math.floor(p.x - r); x <= Math.ceil(p.x + r); x++) {
+    if (!inBounds(x, y) || Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y) > r || Shared.isLaneTile(curMap(), x, y)) continue;
+    fn(x, y, idx(x, y));
+  }
+}
+function useAbility(p, now) {
+  if (round.phase !== 'play') return 'Round over';
+  const key = CHARS[p.char].ability, ab = key && ABILITIES[key];
+  if (!ab) return 'This character has no ability';
+  if (now < p.abAt) return 'Ability recharging';
+  const st = stats(p);
+  p.abAt = now + ab.cd; sendP(p, { t: 'ab', cd: ab.cd });
+  if (key === 'leap') { p.fx.leap = now + ab.dur; broadcast(fxMsg(p)); broadcast({ t: 'abfx', kind: 'leap', id: p.id, x: p.x, y: p.y }); }
+  else if (key === 'blink') {
+    let dx = p.dx, dy = p.dy; if (!dx && !dy) { dx = p.fdx; dy = p.fdy; }
+    const l = Math.hypot(dx, dy) || 1, ox = p.x, oy = p.y;
+    p.x = Math.max(0.5, Math.min(W - 0.5, p.x + dx / l * ab.dist)); p.y = Math.max(0.5, Math.min(H - 0.5, p.y + dy / l * ab.dist)); p.kx = p.ky = 0;
+    const n = Math.max(1, Math.ceil(Math.hypot(p.x - ox, p.y - oy) / 0.8));
+    for (let i = 1; i <= n; i++) stepOn(p, now, ox + (p.x - ox) * i / n, oy + (p.y - oy) * i / n);
+    sendP(p, { t: 'blink', x: p.x, y: p.y }); broadcast({ t: 'abfx', kind: 'blink', id: p.id, x: ox, y: oy, x2: p.x, y2: p.y });
+  } else if (key === 'shockwave') {
+    eachTileNear(p, ab.radius, (x, y, i) => { const o = owner[i]; if (o && o !== p.id && def[i] > 0) setTile(x, y, o, Math.max(0, def[i] - ab.dmg)); });
+    broadcast({ t: 'abfx', kind: 'shockwave', id: p.id, x: p.x, y: p.y, r: ab.radius });
+  } else if (key === 'inferno') {
+    eachTileNear(p, ab.radius, (x, y, i) => {
+      const o = owner[i]; if (o === p.id) return;
+      if (o === 0 || def[i] - ab.dmg <= 0) setTile(x, y, p.id, st.startDef); else setTile(x, y, o, def[i] - ab.dmg);
+    });
+    broadcast({ t: 'abfx', kind: 'inferno', id: p.id, x: p.x, y: p.y, r: ab.radius });
+  }
+}
+
 // ---- Boost pickups on the map ----
 const pickups = new Map(); // id -> {id,type,x,y,exp}
 let nextPickup = 1;
 const fxMsg = p => ({ t: 'fx', id: p.id, fx: Object.fromEntries(Object.entries(p.fx).filter(([, e]) => e > Date.now()).map(([k, e]) => [k, e - Date.now()])) });
 
 function pickType() {
-  const total = Object.values(PICKUPS).reduce((a, b) => a + b.weight, 0);
+  const total = Object.values(PICKUPS).reduce((a, b) => a + b.weight, 0); // (weight 0 = never spawns on the map)
   let r = Math.random() * total;
   for (const [k, v] of Object.entries(PICKUPS)) { if ((r -= v.weight) < 0) return k; }
   return 'rapid';
@@ -238,7 +327,7 @@ function collect(p, pk) {
   pickups.delete(pk.id);
   broadcast({ t: 'pickup-', id: pk.id, by: p.id });
   if (pk.type === 'boom') explode(p);
-  else { p.fx[pk.type] = Date.now() + BOOST_MS; broadcast(fxMsg(p)); }
+  else { p.fx[pk.type] = Date.now() + BOOST_MS * (CHARS[p.char].fxMult || 1); broadcast(fxMsg(p)); }
   sendP(p, { t: 'got', type: pk.type });
 }
 setInterval(spawnPickups, 2500);
@@ -257,7 +346,7 @@ const round = { n: 1, mapId: Shared.MAPS[process.env.START_MAP] ? process.env.ST
 let mapDirty = false;
 function resetMap() {
   owner.fill(0); def.fill(0); mapDirty = false; pickups.clear();
-  players.forEach(p => { p.count = 0; p.fx = {}; p.dx = 0; p.dy = 0; p.last = 0; });
+  players.forEach(p => { p.count = 0; p.fx = {}; p.dx = 0; p.dy = 0; p.last = 0; p.abAt = 0; });
 }
 function startRound() {
   const counts = tally(), max = Math.max(...Object.values(counts));
@@ -266,22 +355,26 @@ function startRound() {
   resetMap(); round.n++; round.phase = 'play'; round.endsAt = Date.now() + ROUND_MS; round.results = null;
   for (const p of online()) {
     Object.assign(p, Shared.safeSpot(curMap()), { kx: 0, ky: 0, tpUntil: 0 });
-    sendP(p, { t: 'spawn', x: p.x, y: p.y });
+    sendP(p, { t: 'spawn', x: p.x, y: p.y }); sendP(p, { t: 'ab', cd: 0 });
   }
   broadcast({ t: 'round', n: round.n, left: ROUND_MS, map: round.mapId, counts });
 }
 function endRound() {
   const ranked = [...players.values()].filter(p => p.count > 0).sort((a, b) => b.count - a.count);
-  if (ranked[0]) ranked[0].wins = (ranked[0].wins || 0) + 1;
+  // A win only counts if at least 2 real players took part (claimed 20+ tiles) - so playing alone earns nothing - and the winner is one of them.
+  const playing = online().filter(p => p.count >= MIN_TILES_TO_COUNT), solo = playing.length < MIN_PLAYERS_FOR_WIN;
+  const winner = ranked[0] && !solo && playing.includes(ranked[0]) ? ranked[0] : null;
+  if (winner) { winner.wins++; winner.total++; winner.ver++; }
   votes.clear(); round.phase = 'results'; round.resultsUntil = Date.now() + RESULT_MS; pickups.clear();
   round.results = {
-    n: round.n, total: W * H, mapId: round.mapId, counts: tally(),
-    board: ranked.slice(0, 8).map(p => ({ id: p.id, name: p.name, hue: p.hue, count: p.count, wins: p.wins || 0 })),
+    n: round.n, total: W * H, mapId: round.mapId, counts: tally(), solo, awarded: winner ? winner.id : 0,
+    board: ranked.slice(0, 8).map(p => ({ id: p.id, name: p.name, hue: p.hue, count: p.count, wins: p.total || 0 })),
   };
   for (const p of online()) {
     p.dx = p.dy = 0;
     const r = ranked.indexOf(p);
     sendP(p, { t: 'rank', rank: r < 0 ? 0 : r + 1, count: p.count, of: ranked.length });
+    if (p === winner) pushProg(p);
   }
   broadcast({ t: 'roundEnd', ...round.results, next: RESULT_MS });
   save();
@@ -322,7 +415,7 @@ setInterval(() => {
       for (let i = 1; i <= n; i++) stepOn(p, now, ox + (p.x - ox) * i / n, oy + (p.y - oy) * i / n);
     }
     for (const pk of pickups.values()) {
-      if (Math.hypot(pk.x - p.x, pk.y - p.y) < 1.0) { collect(p, pk); }
+      if (Math.hypot(pk.x - p.x, pk.y - p.y) < 1.0 * stats(p).magnet) { collect(p, pk); }
     }
   }
   for (const pk of pickups.values()) {
@@ -347,7 +440,7 @@ wss.on('connection', ws => {
     }
   });
   ws.on('message', raw => {
-    if (++msgs > 40 || raw.length > 512) return; // basic flood protection
+    if (++msgs > 40 || raw.length > 2048) return; // basic flood protection (join carries the signed save, so it can be longer)
     let m; try { m = JSON.parse(raw); } catch { return; }
 
     if (m.t === 'join' && !me) {
@@ -356,12 +449,14 @@ wss.on('connection', ws => {
       else {
         const token = crypto.randomBytes(16).toString('hex');
         me = {
-          id: nextId++, token, name: cleanName(m.name), hue: Math.floor(Math.random() * 360), char: 'fox',
-          ...newPlayerState(), ...Shared.safeSpot(curMap()),
+          id: nextId++, token, name: cleanName(m.name), hue: Math.floor(Math.random() * 360), char: STARTERS[0],
+          ...newPlayerState(), ...newProg(), ...Shared.safeSpot(curMap()),
         };
         players.set(me.id, me); tokens.set(token, me.id);
       }
-      me.char = CHARS[m.char] ? m.char : (CHARS[me.char] ? me.char : CHAR_KEYS[me.id % CHAR_KEYS.length]);
+      const saved = readSave(m.save); // the signed save from the player's browser; the newer of (browser, server memory) wins
+      if (saved && saved.ver > (me.ver || 0)) { me.wins = saved.wins; me.total = saved.total; me.ver = saved.ver; me.owned = UNLOCK_ALL ? new Set(CHAR_KEYS) : saved.owned; }
+      me.char = me.owned.has(m.char) ? m.char : (me.owned.has(me.char) ? me.char : STARTERS[0]); me.abAt = 0;
       if (!me.online) Object.assign(me, Shared.safeSpot(curMap()), { kx: 0, ky: 0, tpUntil: 0 });
       me.online++; me.socks.add(ws);
       send(ws, {
@@ -371,22 +466,41 @@ wss.on('connection', ws => {
         pickups: [...pickups.values()].map(k => ({ id: k.id, type: k.type, x: k.x, y: k.y, left: k.exp - Date.now() })),
         fx: Object.fromEntries(online().map(p => [p.id, fxMsg(p).fx])),
         round: { n: round.n, phase: round.phase, left: (round.phase === 'play' ? round.endsAt : round.resultsUntil) - Date.now() },
-        results: round.phase === 'results' ? round.results : null, map: round.mapId, votes: tally(),
+        results: round.phase === 'results' ? round.results : null, map: round.mapId, votes: tally(), prog: progMsg(me),
       });
       broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue, char: me.char });
     } else if (m.t === 'move' && me) {
       me.dx = Math.max(-1, Math.min(1, Number(m.dx) || 0));
       me.dy = Math.max(-1, Math.min(1, Number(m.dy) || 0));
+      if (me.dx || me.dy) { me.fdx = me.dx; me.fdy = me.dy; }
     } else if (m.t === 'chat' && me) {
       const now = Date.now(), msg = cleanChat(m.msg);
       if (!msg || now - lastChat < 1000) return;
       lastChat = now;
       broadcast({ t: 'chat', id: me.id, msg });
+    } else if (m.t === 'rename' && me) { // change your name any time
+      const now = Date.now(); if (now - (me.renamedAt || 0) < 1500) return; me.renamedAt = now;
+      me.name = cleanName(m.name); broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue, char: me.char });
     } else if (m.t === 'ping') {
       send(ws, { t: 'pong', c: m.c });
     } else if (m.t === 'vote' && me) {
       if (round.phase !== 'results' || !Shared.MAPS[m.map]) return;
       votes.set(me.id, m.map); broadcast({ t: 'votes', counts: tally() });
+    } else if (m.t === 'ability' && me) {
+      const err = useAbility(me, Date.now());
+      if (err) send(ws, { t: 'err', msg: err });
+    } else if (m.t === 'unlock' && me) { // spend wins on a new character
+      const k = m.char, c = CHARS[k];
+      if (!c) return;
+      if (me.owned.has(k)) return send(ws, { t: 'err', msg: 'You already own ' + c.name });
+      if (me.wins < costOf(k)) return send(ws, { t: 'err', msg: `${c.name} costs ${costOf(k)} wins - you have ${me.wins}` });
+      me.wins -= costOf(k); me.owned.add(k); me.ver++;
+      pushProg(me); sendP(me, { t: 'unlocked', char: k });
+    } else if (m.t === 'equip' && me) { // switch character (between rounds)
+      if (!me.owned.has(m.char)) return send(ws, { t: 'err', msg: 'You have not unlocked that character' });
+      if (round.phase === 'play' && me.count > 0) return send(ws, { t: 'err', msg: 'Switch characters between rounds' });
+      me.char = m.char; me.abAt = 0; pushProg(me); sendP(me, { t: 'ab', cd: 0 });
+      broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue, char: me.char });
     } else if (m.t === 'fort' && me) {
       const err = fortify(me, Date.now());
       if (err) send(ws, { t: 'err', msg: err });

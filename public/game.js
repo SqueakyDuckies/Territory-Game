@@ -28,6 +28,8 @@ let curMap = null, NEUTRAL = '#1a1f2a', myVote = null, voteCounts = {};
 const avatars = {}, pickups = {}, fxUntil = {}; // fxUntil[id][type] = performance.now() expiry
 const keys = new Set(); let padDir = [0, 0], sent = '0,0';
 let chosenChar = localStorage.getItem('char') || 'fox';
+let prog = { wins: 0, total: 0, owned: new Set() }, abReadyAt = 0, abTotal = 1;
+const TIER_ORDER = ['starter', 'good', 'great', 'op'];
 
 // ---------- three.js setup ----------
 const renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
@@ -173,7 +175,7 @@ function stepEffects(dt) {
 const has = (id, t) => ((fxUntil[id] || {})[t] || 0) > performance.now();
 function myStats() {
   const c = CFG.chars[myChar];
-  return { speed: CFG.base.speed * (c.speed || 1) * (has(me, 'haste') ? CFG.haste : 1) };
+  return { speed: CFG.base.speed * (c.speed || 1) * (has(me, 'haste') ? CFG.haste : 1) * (has(me, 'leap') ? CFG.abilities.leap.mult : 1) };
 }
 function toast(html, color) {
   const t = $('toast'); t.innerHTML = html; t.style.display = 'block'; t.style.borderColor = color || '#2a3140';
@@ -183,24 +185,34 @@ function toast(html, color) {
 // ---------- login + networking ----------
 fetch('/config').then(r => r.json()).then(cfg => {
   CFG = cfg;
-  if (!cfg.chars[chosenChar]) chosenChar = 'fox';
-  $('chars').innerHTML = Object.entries(cfg.chars).map(([k, c]) => `<div class="ch" data-k="${k}">${c.icon}<small>${c.name}</small></div>`).join('');
-  const sel = () => {
+  const starters = Object.keys(cfg.chars).filter(k => cfg.chars[k].tier === 'starter');
+  prog.owned = new Set(starters);
+  try { const b = (localStorage.getItem('save') || '').split('.')[0]; if (b) { const d = JSON.parse(atob(b.replace(/-/g, '+').replace(/_/g, '/'))); prog.wins = d.wins | 0; prog.total = d.total | 0; (d.owned || []).forEach(k => cfg.chars[k] && prog.owned.add(k)); } } catch (e) { /* no saved progress yet */ }
+  if (!prog.owned.has(chosenChar)) chosenChar = starters[0];
+  $('wins').textContent = prog.wins;
+  const grid = () => Object.entries(cfg.chars).map(([k, c]) => `<div class="ch tier-${c.tier}${prog.owned.has(k) ? '' : ' locked'}" data-k="${k}">${c.icon}<small>${c.name}</small>${prog.owned.has(k) ? '' : `<i class="lock">🔒${cfg.tiers[c.tier].cost}</i>`}</div>`).join('');
+  $('chars').innerHTML = grid();
+  const sel = (msg) => {
     [...$('chars').children].forEach(e => e.classList.toggle('sel', e.dataset.k === chosenChar));
-    $('perktext').textContent = cfg.chars[chosenChar].perk;
+    const c = cfg.chars[chosenChar], ab = c.ability && cfg.abilities[c.ability];
+    $('perktext').innerHTML = msg || `<b>${c.name}</b> · ${cfg.tiers[c.tier].label}<br>${esc(c.perk)}${ab ? `<br>${ab.icon} Q: <b>${ab.name}</b> - ${esc(ab.desc)}` : ''}`;
   };
-  $('chars').onclick = e => { const el = e.target.closest('.ch'); if (el) { chosenChar = el.dataset.k; localStorage.setItem('char', chosenChar); sel(); } };
+  $('chars').onclick = e => {
+    const el = e.target.closest('.ch'); if (!el) return; const k = el.dataset.k, c = cfg.chars[k];
+    if (!prog.owned.has(k)) { sel(`🔒 <b>${c.name}</b> (${cfg.tiers[c.tier].label}) costs <b>${cfg.tiers[c.tier].cost} wins</b>. Win rounds against other players, then unlock it in the game with <b>C</b>.<br>You have 🏆 ${prog.wins}.`); return; }
+    chosenChar = k; localStorage.setItem('char', chosenChar); sel();
+  };
   sel();
 });
 $('name').value = localStorage.getItem('name') || '';
 $('go').onclick = () => { if (!CFG) return; localStorage.setItem('name', $('name').value); connect(); $('login').style.display = 'none'; };
-$('name').onkeydown = e => e.key === 'Enter' && $('go').click();
+$('name').onkeydown = e => { if (e.key === 'Enter') $('go').click(); }; // (must NOT return false for other keys, or the browser swallows every letter you type)
 const sendJ = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
 
 function connect() {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
   clearInterval(connect.ping); connect.ping = setInterval(() => sendJ({ t: 'ping', c: performance.now() }), 1000);
-  ws.onopen = () => { sendJ({ t: 'ping', c: performance.now() }); sendJ({ t: 'join', name: $('name').value, token: localStorage.getItem('token'), char: chosenChar }); };
+  ws.onopen = () => { sendJ({ t: 'ping', c: performance.now() }); sendJ({ t: 'join', name: $('name').value, token: localStorage.getItem('token'), char: chosenChar, save: localStorage.getItem('save') || undefined }); };
   ws.onclose = () => { clearInterval(connect.ping); flash('Disconnected - reconnecting...'); setTimeout(connect, 2000); };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
@@ -248,8 +260,18 @@ function connect() {
       burst(m.from.x, m.from.y, c, 3, 0.5); burst(m.to.x, m.to.y, c, 3, 0.6); sparkBurst(m.from.x, m.from.y, c, 10, 3); sparkBurst(m.to.x, m.to.y, c, 10, 3);
     } else if (m.t === 'vortexfx') { burst(m.x, m.y, new THREE.Color('#b07bff'), 4, 0.6); sparkBurst(m.x, m.y, new THREE.Color('#d9c2ff'), 12, 5); }
     else if (m.t === 'votes') { voteCounts = m.counts; updateVotes(); }
-    else if (m.t === 'err') flash(m.msg);
+    else if (m.t === 'err') { flash(m.msg); if ($('chpanel').style.display === 'block') toast('⚠️ ' + m.msg, '#ff6b6b'); }
     else if (m.t === 'ok') { lastAct = performance.now(); cdUsed = m.cd; }
+    else if (m.t === 'prog') applyProg(m);
+    else if (m.t === 'unlocked') { const c = CFG.chars[m.char]; toast(`🔓 <b>${c.name}</b> unlocked! <span style="font-weight:400;font-size:13px">Pick it in Characters (C) between rounds</span>`, '#ffc83d'); sparkBurst(mine.x, mine.y, new THREE.Color('#ffd23f'), 24, 6); }
+    else if (m.t === 'ab') { abTotal = Math.max(1, m.cd); abReadyAt = performance.now() + m.cd; }
+    else if (m.t === 'blink') { mine.x = m.x; mine.y = m.y; mine.kx = mine.ky = 0; hist.length = 0; vis.x = vis.y = 0; mine.ignoreUntil = performance.now() + 400; tgt.x = m.x; tgt.z = m.y; }
+    else if (m.t === 'abfx') {
+      if (m.kind === 'leap') sparkBurst(m.x, m.y, new THREE.Color('#9be8ff'), 12, 4);
+      else if (m.kind === 'blink') { const c = new THREE.Color('#e6a8ff'); burst(m.x, m.y, c, 3, 0.5); burst(m.x2, m.y2, c, 3, 0.5); sparkBurst(m.x, m.y, c, 10, 4); sparkBurst(m.x2, m.y2, c, 14, 5); }
+      else if (m.kind === 'shockwave') { const c = new THREE.Color('#7fd6ff'); burst(m.x, m.y, c, m.r * 1.8, 0.7); burst(m.x, m.y, c, m.r * 1.2, 0.5); sparkBurst(m.x, m.y, c, 22, m.r * 1.5); }
+      else if (m.kind === 'inferno') { const c = new THREE.Color('#ff7a2a'); burst(m.x, m.y, c, m.r * 2, 0.8); burst(m.x, m.y, new THREE.Color('#ffd23f'), m.r, 0.5); sparkBurst(m.x, m.y, c, 30, m.r * 1.6); }
+    }
     else if (m.t === 'pickup+') addPickup(m);
     else if (m.t === 'pickup-') {
       const o = pickups[m.id];
@@ -279,7 +301,7 @@ function onInit(m) {
   setMine(m.x, m.y); tgt.set(m.x, 0, m.y); sent = '0,0';
   round.n = m.round.n; round.phase = m.round.phase; round.endsAt = performance.now() + m.round.left; myRank = null;
   if (m.results) showResults(m.results); else $('results').style.display = 'none';
-  const c = CFG.chars[myChar]; $('me').textContent = `${c.icon} ${c.name}`; $('perk').textContent = c.perk;
+  applyProg(m.prog); describeChar(); abReadyAt = 0;
   updateMine();
   if (!started) { started = true; last = performance.now(); requestAnimationFrame(frame); }
 }
@@ -294,16 +316,45 @@ function updateVotes() {
   document.querySelectorAll('.vc').forEach(el => { el.classList.toggle('sel', el.dataset.m === myVote); el.querySelector('.cnt').textContent = voteCounts[el.dataset.m] || 0; });
 }
 function vote(id) { if (round.phase !== 'results' || !Shared.MAPS[id]) return; myVote = id; sendJ({ t: 'vote', map: id }); updateVotes(); }
+function describeChar() {
+  const c = CFG.chars[myChar], ab = c.ability && CFG.abilities[c.ability];
+  $('me').textContent = `${c.icon} ${c.name}`; $('perk').textContent = c.perk + (ab ? `  ·  Q: ${ab.icon} ${ab.name}` : '');
+  $('abbtn').style.display = ab ? 'flex' : 'none'; if (ab) $('abbtn').querySelector('.abico').textContent = ab.icon;
+}
+function applyProg(m) {
+  prog.wins = m.wins; prog.total = m.total; prog.owned = new Set(m.owned);
+  if (m.save) { try { localStorage.setItem('save', m.save); } catch (e) { /* private mode */ } }
+  $('wins').textContent = m.wins;
+  if (m.char && m.char !== myChar) { myChar = m.char; localStorage.setItem('char', myChar); if (CFG) describeChar(); }
+  if ($('chpanel').style.display === 'block') renderChars();
+}
+function renderChars() {
+  $('chwins').textContent = prog.wins;
+  const keys = Object.keys(CFG.chars).sort((a, b) => TIER_ORDER.indexOf(CFG.chars[a].tier) - TIER_ORDER.indexOf(CFG.chars[b].tier));
+  $('chgrid').innerHTML = keys.map(k => {
+    const c = CFG.chars[k], t = CFG.tiers[c.tier], owned = prog.owned.has(k), eq = myChar === k, ab = c.ability && CFG.abilities[c.ability];
+    const btn = eq ? '<button disabled class="eq">✔ In use</button>' : owned ? `<button data-a="equip" data-k="${k}">Use this one</button>`
+      : prog.wins >= t.cost ? `<button data-a="unlock" data-k="${k}" class="buy">Unlock · 🏆 ${t.cost}</button>` : `<button disabled>🔒 Needs ${t.cost} wins (${t.cost - prog.wins} more)</button>`;
+    return `<div class="cc tier-${c.tier}${owned ? ' owned' : ''}${eq ? ' eq' : ''}"><div class="cc-top"><span class="cc-ico">${c.icon}</span><div><b>${c.name}</b><span class="badge">${t.label}${t.cost ? ' · 🏆' + t.cost : ' · free'}</span></div></div><p class="perk">${esc(c.perk)}</p>${ab ? `<p class="abil">${ab.icon} <b>Q: ${ab.name}</b> - ${esc(ab.desc)} <i>(${Math.round(ab.cd / 1000)}s cooldown)</i></p>` : ''}${btn}</div>`;
+  }).join('');
+}
+function toggleChars(on) { const p = $('chpanel'), show = on === undefined ? p.style.display !== 'block' : on; p.style.display = show ? 'block' : 'none'; if (show) { renderChars(); $('rename').value = players[me] ? players[me].name : ($('name').value || ''); } }
+$('renamebtn').onclick = () => { const v = $('rename').value.trim(); if (v) { sendJ({ t: 'rename', name: v }); localStorage.setItem('name', v); $('name').value = v; toast('✏️ Name changed to <b>' + esc(v) + '</b>', '#5aa9ff'); } };
+$('rename').onkeydown = e => { if (e.key === 'Enter') $('renamebtn').click(); };
+$('chbtn').onclick = () => toggleChars(); $('chclose').onclick = () => toggleChars(false);
+$('chgrid').onclick = e => { const b = e.target.closest('button[data-a]'); if (b) sendJ({ t: b.dataset.a, char: b.dataset.k }); };
+$('abbtn').onpointerdown = e => { e.preventDefault(); sendJ({ t: 'ability' }); };
 function showResults(r) {
   const top = r.board, win = top[0];
   const rows = top.slice(0, 5).map((p, i) => `<div class="row${p.id === me ? ' you' : ''}"><b>${['🥇', '🥈', '🥉', '4', '5'][i]}</b><span class="dot" style="background:hsl(${p.hue},65%,52%)"></span><span class="n">${esc(p.name)}</span><b>${p.count}</b><span style="color:#8b95a8;width:42px;text-align:right">${Math.round(p.count / r.total * 100)}%</span></div>`).join('');
   const mineRow = top.findIndex(p => p.id === me);
   const youLine = mineRow >= 0 ? (mineRow === 0 ? '🎉 <b>You won!</b>' : `You finished #${mineRow + 1}`) : (myRank && myRank.rank ? `You finished #${myRank.rank} with ${myRank.count} tiles` : 'You didn\'t claim any tiles');
   voteCounts = r.counts || {}; myVote = null;
+  const extra = r.awarded === me ? `<div class="award">🏆 <b>+1 win!</b> You now have ${prog.wins} to spend - press <b>C</b> for Characters</div>` : r.solo ? '<div class="solo">Solo round: wins only count when 2+ players take part</div>' : '';
   const cards = Shared.MAP_IDS.map((id, i) => { const mp = Shared.MAPS[id];
     return `<div class="vc" data-m="${id}"><span class="key">${i + 1}</span><span class="cnt">0</span><canvas width="160" height="160"></canvas><b>${mp.icon} ${mp.name}</b><small>${voteTags(mp)}</small></div>`; }).join('');
   $('results').innerHTML = `<h2>Round ${r.n} complete</h2>` + (win ? `<div class="win">🏆 <b>${esc(win.name)}</b> wins with ${win.count} tiles!</div>${rows}` : '<div class="win">Nobody claimed anything!</div>') +
-    `<div style="margin-top:8px">${youLine}</div><div class="votehdr">Vote for the next map</div><div id="vote">${cards}</div><div class="next">Next round in <b id="nextin">12</b>s</div>`;
+    `<div style="margin-top:8px">${youLine}</div>${extra}<div class="votehdr">Vote for the next map</div><div id="vote">${cards}</div><div class="next">Next round in <b id="nextin">12</b>s</div>`;
   document.querySelectorAll('.vc').forEach(el => { Scenery.drawPreview(el.querySelector('canvas'), Shared.MAPS[el.dataset.m]); el.onclick = () => vote(el.dataset.m); });
   updateVotes();
   $('results').style.display = 'block';
@@ -345,10 +396,13 @@ addEventListener('keydown', e => {
     else if (e.key === 'Escape') $('chatin').blur();
     return;
   }
-  if (document.activeElement === $('name')) return;
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return; // typing in any text box: no game hotkeys
   if ($('results').style.display === 'block' && ['1', '2', '3'].includes(e.key)) { vote(Shared.MAP_IDS[+e.key - 1]); return; }
   if (e.key === 'Enter') { e.preventDefault(); $('chatin').focus(); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) sendJ({ t: 'fort' }); return; }
+  if (k === 'q' && !e.repeat) { sendJ({ t: 'ability' }); return; }
+  if (k === 'c' && !e.repeat) { toggleChars(); return; }
+  if (e.key === 'Escape' && $('chpanel').style.display === 'block') { toggleChars(false); return; }
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { e.preventDefault(); keys.add(k); syncDir(); }
 });
 addEventListener('keyup', e => { keys.delete(e.key.toLowerCase()); syncDir(); });
@@ -467,6 +521,7 @@ function frame(now) {
     $('roundn').textContent = 'Round ' + round.n;
     const ni = $('nextin'); if (ni && round.phase !== 'play') ni.textContent = left; }
   $('fill').style.width = Math.min(1, (now - lastAct) / cdUsed) * 100 + '%';
+  { const ab = $('abbtn'); if (ab.style.display !== 'none') { const left = Math.max(0, abReadyAt - now); ab.style.setProperty('--p', (left <= 0 ? 360 : (1 - left / abTotal) * 360) + 'deg'); ab.classList.toggle('ready', left <= 0 && round.phase === 'play'); } }
   updateChips(now);
   requestAnimationFrame(frame);
 }
@@ -474,7 +529,7 @@ function frame(now) {
 const chipEls = {};
 function updateChips(now) {
   const want = {}, fx = fxUntil[me] || {};
-  for (const k in fx) if (fx[k] > now) { const i = CFG.pickups[k]; want['fx:' + k] = { icon: i.icon, name: i.name, color: i.color, t: Math.ceil((fx[k] - now) / 1000) + 's', frac: (fx[k] - now) / CFG.boostMs }; }
+  for (const k in fx) if (fx[k] > now) { const i = CFG.pickups[k]; want['fx:' + k] = { icon: i.icon, name: i.name, color: i.color, t: Math.ceil((fx[k] - now) / 1000) + 's', frac: (fx[k] - now) / (CFG.pickups[k].dur || CFG.boostMs * (CFG.chars[myChar].fxMult || 1)) }; }
   if (curMap && round.phase === 'play') {
     const zs = Shared.zonesAt(curMap, mine.x, mine.y);
     const lane = Shared.laneAt(curMap, mine.x, mine.y);

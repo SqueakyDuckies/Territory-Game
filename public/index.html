@@ -49,19 +49,50 @@
   .vc small{display:block;color:#8b95a8;font-size:10.5px;line-height:1.3;min-height:28px;margin-top:2px}
   .vc .cnt,.vc .key{position:absolute;top:10px;background:rgba(0,0,0,.72);border-radius:999px;padding:1px 8px;font-weight:700;font-size:12px}
   .vc .cnt{right:10px}.vc .key{left:10px;border-radius:6px;padding:0 6px;color:#aab3c5}
+  .tier-starter{--tc:#9aa5b8}.tier-good{--tc:#6fdc8c}.tier-great{--tc:#5aa9ff}.tier-op{--tc:#ffc83d}
+  #hud .winsrow{display:flex;align-items:center;gap:8px;margin-top:6px}
+  #hud .winsrow button{margin-left:auto;padding:3px 9px;border-radius:7px;border:1px solid #3a4560;background:#1a2438;color:#dfe7f5;font:inherit;font-size:12px;cursor:pointer}
+  #hud .winsrow button:hover{background:#243350}
+  #abbtn{display:none;position:fixed;right:18px;bottom:18px;width:70px;height:70px;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;user-select:none;touch-action:none;
+    background:conic-gradient(#5aa9ff var(--p,360deg),#2a3345 0);box-shadow:0 0 0 2px #0f1218}
+  #abbtn::before{content:"";position:absolute;inset:6px;border-radius:50%;background:#10151f}
+  #abbtn .abico{position:relative;font-size:30px}
+  #abbtn .abkey{position:absolute;top:-6px;right:-4px;background:#0f1218;border:1px solid #3a4560;border-radius:6px;padding:0 6px;font-size:11px;font-weight:700;color:#aab3c5}
+  #abbtn.ready{animation:abpulse 1.4s infinite}
+  @keyframes abpulse{50%{box-shadow:0 0 0 2px #0f1218,0 0 16px 4px rgba(90,169,255,.65)}}
+  #chpanel{display:none;inset:0;margin:auto;width:min(900px,96vw);height:fit-content;max-height:92vh;overflow:auto;z-index:20;padding:16px;border-color:#5aa9ff}
+  .chhead{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+  .chhead h3{margin:0;font-size:20px}
+  .rn{display:flex;gap:6px;flex:1;max-width:300px}.rn input{flex:1;min-width:0;padding:6px 8px;border-radius:7px;border:1px solid #2a3140;background:#1a2030;color:inherit;font:inherit}
+  .chhead .rn button{width:auto;height:auto;padding:0 10px;font-size:12px;font-weight:600}.chhead .bal{margin-left:auto;font-size:15px}
+  .chhead button{border:0;background:#2a3345;color:#fff;border-radius:8px;width:30px;height:30px;font-size:15px;cursor:pointer}
+  #chgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+  .cc{position:relative;border:2px solid color-mix(in srgb,var(--tc) 40%,#1a2030);border-radius:12px;background:#121826;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+  .cc:not(.owned){opacity:.92}.cc.eq{border-color:var(--tc);box-shadow:0 0 14px color-mix(in srgb,var(--tc) 50%,transparent)}
+  .cc.tier-op{background:linear-gradient(135deg,#1c1a12,#121826 60%)}
+  .cc-top{display:flex;align-items:center;gap:10px}.cc-ico{font-size:34px}
+  .cc-top b{display:block;font-size:16px}
+  .badge{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#10151f;background:var(--tc);border-radius:999px;padding:1px 8px}
+  .cc p{margin:0;font-size:12.5px;line-height:1.35;color:#c4ccdc}.cc p.abil{color:#ffd9a0}
+  .cc button{margin-top:auto;padding:7px;border-radius:8px;border:1px solid #3a4560;background:#1a2438;color:#e8ecf3;font:inherit;font-weight:600;cursor:pointer}
+  .cc button.buy{background:var(--tc);color:#10151f;border:0}.cc button:disabled{opacity:.55;cursor:default}.cc button.eq{background:#1d3a2a;border-color:#3f8f5c}
+  .chnote{margin-top:10px;color:#8b95a8;font-size:12px;text-align:center}
+  .award{margin-top:8px;color:#ffd23f;font-size:15px}.solo{margin-top:8px;color:#8b95a8;font-size:12.5px}
   #toast{top:70px;left:50%;transform:translateX(-50%);font-weight:700;font-size:18px;display:none;white-space:nowrap}
-  #login{inset:0;margin:auto;width:310px;height:fit-content;text-align:center;max-height:96vh;overflow:auto}
-  #chars{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
-  .ch{padding:8px 2px;border-radius:10px;cursor:pointer;border:2px solid #2a3140;background:#1a2030;font-size:28px;line-height:1.1}
-  .ch small{display:block;font-size:11px;color:#aab3c5;margin-top:2px}
+  #login{inset:0;margin:auto;width:min(400px,96vw);height:fit-content;text-align:center;max-height:96vh;overflow:auto}
+  #chars{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:10px}
+  .ch{position:relative;padding:7px 2px 6px;border-radius:10px;cursor:pointer;border:2px solid #2a3140;background:#1a2030;font-size:25px;line-height:1.1;box-shadow:inset 0 -3px 0 var(--tc,#9aa5b8)}
+  .ch.locked{opacity:.5;filter:grayscale(.7)}
+  .ch .lock{position:absolute;top:-6px;right:-4px;background:#10151f;border:1px solid #3a4560;border-radius:999px;padding:0 5px;font-size:10px;font-style:normal;color:#ffd23f}
+  .ch small{display:block;font-size:10px;color:#aab3c5;margin-top:2px}
   .ch.sel{border-color:#5aa9ff;background:#202a40}
-  #perktext{margin-top:8px;color:#aab3c5;font-size:12px;min-height:30px}
+  #perktext{margin-top:8px;color:#aab3c5;font-size:12px;min-height:44px;line-height:1.35}
   #chat{left:50%;transform:translateX(-50%);bottom:12px;width:min(420px,50vw);padding:6px}
   #chat input{width:100%;box-sizing:border-box;padding:7px;border-radius:6px;border:1px solid #2a3140;background:#1a2030;color:inherit;font:inherit}
   #fortbtn{display:none;right:176px;bottom:50px;width:56px;height:56px;border-radius:50%;align-items:center;justify-content:center;font-size:26px;padding:0;user-select:none;touch-action:none;background:rgba(90,169,255,.25);border-color:#5aa9ff}
   #pad{display:none;right:14px;bottom:14px;width:150px;height:150px;padding:0;background:none;border:0}
   #pad b{position:absolute;width:48px;height:48px;border-radius:12px;background:rgba(90,169,255,.25);border:1px solid #5aa9ff;display:flex;align-items:center;justify-content:center;font-size:20px;user-select:none;touch-action:none}
-  @media (pointer:coarse){#pad{display:block}#fortbtn{display:flex}#chat{display:none}#help{display:none}}
+  @media (pointer:coarse){#abbtn{bottom:178px;right:18px}#pad{display:block}#fortbtn{display:flex}#chat{display:none}#help{display:none}}
   #login input[type=text],#login button{width:100%;box-sizing:border-box;padding:9px;margin-top:8px;border-radius:6px;border:1px solid #2a3140;background:#1a2030;color:inherit;font:inherit}
   #login button{background:#5aa9ff;color:#06101e;font-weight:600;cursor:pointer;border:0}
   #pins div{position:fixed;transform:translate(-50%,-50%);width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.65);border:2px solid;display:flex;align-items:center;justify-content:center;font-size:18px;pointer-events:none}
@@ -74,14 +105,22 @@
 <span class="k"><b>WASD / arrows</b> walk. Every tile you walk over becomes yours.</span>
 <span class="k">Walk over enemy land to take it. Shielded tiles are hit while you stand on them. <b>Space</b> fortifies the tiles around you (thicker white border = more shield).</span>
 <span class="k"><b>Rounds last 60 seconds.</b> Most tiles wins! Vote on the next map between rounds.</span>
+<span class="k"><b>Q</b> = your ability (if you have one). <b>C</b> = characters: win rounds vs other players, spend 🏆 to unlock better ones.</span>
 <span class="k"><b>Every map has ONE hazard:</b> 🌊 whirlpools pull you in · 🟤 mud halves your speed · ⚡ boost lanes help <b>only in their direction</b> (slow you the other way, and can't be claimed).</span>
 <span class="k">Grab glowing <b>boosts</b>. They vanish in 15s! <b>Enter</b> chats.</span></div>
 <div id="board" class="panel"><h4>Leaders · <span id="online">0</span> online</h4><span id="rows"></span></div>
 <div id="hud" class="panel"><div id="me"></div><div id="perk"></div>
+  <div class="winsrow">🏆 <b id="wins">0</b> wins <button id="chbtn">Characters (C)</button></div>
   <div style="margin-top:6px">Your tiles: <b id="mine">0</b></div>
   <div id="bar"><i id="fill"></i></div><div id="msg"></div><div id="fx"></div></div>
 <div id="timer" class="panel"><small id="roundn">Round 1</small><small id="mapname" style="letter-spacing:.04em;text-transform:none;color:#aab3c5;margin-bottom:2px"></small><b id="clock">1:00</b></div>
 <div id="results" class="panel"></div>
+<div id="chpanel" class="panel">
+  <div class="chhead"><h3>Characters</h3><span class="rn"><input id="rename" type="text" maxlength="16" placeholder="Your name"><button id="renamebtn" title="Save name">Save name</button></span><span class="bal">🏆 <b id="chwins">0</b> wins to spend</span><button id="chclose">✕</button></div>
+  <div id="chgrid"></div>
+  <div class="chnote">Win a round against other players to earn 🏆 (solo rounds don't count). Spending wins unlocks a character forever. You can switch characters between rounds.</div>
+</div>
+<div id="abbtn"><span class="abico"></span><span class="abkey">Q</span></div>
 <div id="toast" class="panel"></div>
 <div id="fortbtn" class="panel">🛡️</div>
 <div id="chat" class="panel"><input id="chatin" maxlength="80" placeholder="Press Enter to chat..."></div>
