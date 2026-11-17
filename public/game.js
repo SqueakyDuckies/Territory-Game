@@ -1,8 +1,11 @@
 // ======================= Territory 3D client (three.js r128) =======================
 const $ = id => document.getElementById(id);
-const TS = 12; // texture pixels per tile
+const TS = 16; // texture pixels per tile
+const LEAN = 35 * Math.PI / 180;  // characters lean back toward the camera so they don't get squashed from above
+const PITCH = 66 * Math.PI / 180; // camera angle: 90 = straight down. Flat 2D map, upright 3D characters
 let CFG, W = 0, H = 0, owner, def, players = {}, me = 0, myChar = 'fox';
 let ws, follow = true, lastAct = 0, cdUsed = 800, started = false;
+const round = { n: 1, phase: 'play', endsAt: 0 }; let myRank = null;
 let mine = { x: 0, y: 0 };
 const avatars = {}, pickups = {}, fxUntil = {}; // fxUntil[id][type] = performance.now() expiry
 const keys = new Set(); let padDir = [0, 0], sent = '0,0';
@@ -13,14 +16,13 @@ const renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0d12);
-scene.fog = new THREE.Fog(0x0a0d12, 45, 95);
-const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400); // orthographic = no perspective, so the map stays a flat 2D grid
 scene.add(new THREE.HemisphereLight(0xffffff, 0x556677, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.55); sun.position.set(-10, 25, 8); scene.add(sun);
-const tgt = new THREE.Vector3(); let dist = 10;
+const tgt = new THREE.Vector3(); let dist = 16; // = how many world units tall the screen shows (zoom)
 const col = (h, s = 0.6, l = 0.56) => new THREE.Color().setHSL(h / 360, s, l);
 
-let tileCv, tctx, tex, ground, blocks, texDirty = false, texLast = 0, blkDirty = false;
+let tileCv, tctx, tex, ground, texDirty = false, texLast = 0;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
 
 function buildWorld() {
@@ -31,105 +33,32 @@ function buildWorld() {
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   ground = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex }));
   ground.rotation.x = -Math.PI / 2; ground.position.set(W / 2, 0, H / 2); scene.add(ground);
-  blocks = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ color: 0xffffff }), W * H);
-  blocks.instanceMatrix.setUsage(THREE.DynamicDrawUsage); blocks.frustumCulled = false;
-  scene.add(blocks);
-  for (let i = 0; i < W * H; i++) setBlock(i, true);
   repaintAll();
 }
 
 
 function paintTile(x, y) {
-  const o = owner[y * W + x], p = players[o];
+  const i = y * W + x, o = owner[i], p = players[o], d = def[i];
+  const px = x * TS, py = y * TS;
   tctx.fillStyle = o ? `hsl(${p ? p.hue : 0},${p ? 60 : 0}%,${p ? 46 : 32}%)` : '#1a1f2a';
-  tctx.fillRect(x * TS, y * TS, TS, TS);
-  tctx.fillStyle = 'rgba(0,0,0,.28)';
-  tctx.fillRect(x * TS + TS - 1, y * TS, 1, TS); tctx.fillRect(x * TS, y * TS + TS - 1, TS, 1);
+  tctx.fillRect(px, py, TS, TS);
+  tctx.fillStyle = 'rgba(0,0,0,.30)'; // subtle grid line
+  tctx.fillRect(px + TS - 1, py, 1, TS); tctx.fillRect(px, py + TS - 1, TS, 1);
+  if (o && d > 0) { // shield level = thickness of the light border (1-3), tile also gets lighter
+    const t = d * 2;
+    tctx.fillStyle = 'rgba(255,255,255,.16)'; tctx.fillRect(px, py, TS, TS);
+    tctx.fillStyle = 'rgba(255,255,255,.9)';
+    tctx.fillRect(px + 1, py + 1, TS - 3, t); tctx.fillRect(px + 1, py + TS - 2 - t, TS - 3, t);
+    tctx.fillRect(px + 1, py + 1, t, TS - 3); tctx.fillRect(px + TS - 2 - t, py + 1, t, TS - 3);
+  }
   texDirty = true;
 }
 function repaintAll() {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) paintTile(x, y);
-  for (let i = 0; i < W * H; i++) if (def[i]) setBlock(i);
 }
-function setBlock(i, init) { // raised block = fortification level
-  const d = def[i], o = owner[i], x = i % W, y = (i / W) | 0;
-  if (!d || !o) { _m.makeScale(0, 0, 0); }
-  else { const h = 0.22 * d; _m.compose(_p.set(x + 0.5, h / 2, y + 0.5), _q.set(0, 0, 0, 1), _s.set(0.86, h, 0.86)); }
-  blocks.setMatrixAt(i, _m);
-  const p = players[o]; blocks.setColorAt(i, p ? _c.setHSL(p.hue / 360, 0.6, 0.66) : _c.set(0x888888));
-  blkDirty = true;
-}
-
-// ---------- 3D characters (built from simple shapes) ----------
+// ---------- helpers (characters live in characters.js) ----------
 const lam = (c, o = {}) => new THREE.MeshLambertMaterial(Object.assign({ color: c }, o));
 const bas = (c, o = {}) => new THREE.MeshBasicMaterial(Object.assign({ color: c }, o));
-const sph = (r, mat, sx = 1, sy = 1, sz = 1) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14), mat); m.scale.set(sx, sy, sz); return m; };
-const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-const cone = (r, h, mat) => new THREE.Mesh(new THREE.ConeGeometry(r, h, 14), mat);
-const cyl = (r, h, mat) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 12), mat);
-const put = (m, x, y, z, parent) => { m.position.set(x, y, z); parent.add(m); return m; };
-
-function makeCharacter(type, hue) {
-  const root = new THREE.Group(), rig = new THREE.Group(); root.add(rig);
-  const team = col(hue, 0.75, 0.55);
-  const black = lam(0x15171c), white = lam(0xffffff);
-  const eyes = (parent, y, z, sx = 0.12, r = 0.045) => { put(sph(r, black), -sx, y, z, parent); put(sph(r, black), sx, y, z, parent); };
-  let legMat = lam(0x777777), legL, legR, legs = (w, h) => {
-    legL = new THREE.Group(); legR = new THREE.Group();
-    put(box(w, h, w, legMat), 0, -h / 2, 0, legL); put(box(w, h, w, legMat), 0, -h / 2, 0, legR);
-    put(legL, -0.17, 0.32, 0, rig); put(legR, 0.17, 0.32, 0, rig);
-  };
-  if (type === 'fox') {
-    const o = lam(0xe8833a), w = lam(0xfff1e0); legMat = lam(0x3a2a22); legs(0.15, 0.3);
-    put(sph(0.4, o, 1, 1.05, 0.9), 0, 0.62, 0, rig); put(sph(0.27, w, 0.9, 1, 0.5), 0, 0.6, 0.28, rig);
-    const head = put(sph(0.33, o), 0, 1.2, 0, rig);
-    put(sph(0.16, w, 1, 0.8, 1), 0, -0.07, 0.28, head); put(sph(0.04, black), 0, -0.02, 0.43, head); eyes(head, 0.06, 0.29);
-    const e1 = put(cone(0.1, 0.3, o), -0.18, 0.36, 0, head), e2 = put(cone(0.1, 0.3, o), 0.18, 0.36, 0, head); e1.rotation.z = 0.25; e2.rotation.z = -0.25;
-    const tail = put(cone(0.16, 0.6, o), 0, 0.5, -0.45, rig); tail.rotation.x = -1.9; put(sph(0.1, w), 0, -0.32, 0, tail);
-  } else if (type === 'cat') {
-    const g = lam(0x8d95a6), w = lam(0xe9ecf2), pink = lam(0xffa6b8); legMat = lam(0x6b7384); legs(0.14, 0.3);
-    put(sph(0.38, g, 1, 1.05, 0.9), 0, 0.62, 0, rig); put(sph(0.24, w, 0.9, 1, 0.5), 0, 0.6, 0.28, rig);
-    const head = put(sph(0.33, g), 0, 1.2, 0, rig); eyes(head, 0.04, 0.29, 0.13, 0.05);
-    put(sph(0.035, pink), 0, -0.05, 0.33, head);
-    const e1 = put(cone(0.11, 0.26, g), -0.2, 0.33, 0, head), e2 = put(cone(0.11, 0.26, g), 0.2, 0.33, 0, head); e1.rotation.z = 0.3; e2.rotation.z = -0.3;
-    const tail = put(cyl(0.05, 0.7, g), 0, 0.85, -0.42, rig); tail.rotation.x = -0.6;
-  } else if (type === 'frog') {
-    const g = lam(0x58b95a), lg = lam(0xbfe9a0); legMat = lam(0x3f8f42); legs(0.17, 0.28);
-    put(sph(0.43, g, 1.05, 0.95, 0.95), 0, 0.58, 0, rig); put(sph(0.3, lg, 0.9, 0.9, 0.5), 0, 0.52, 0.28, rig);
-    const head = put(sph(0.36, g, 1.15, 0.8, 1), 0, 1.12, 0.02, rig);
-    for (const s of [-1, 1]) { const eb = put(sph(0.14, g), 0.2 * s, 0.26, 0.04, head); put(sph(0.1, white), 0, 0.04, 0.07, eb); put(sph(0.05, black), 0, 0.04, 0.15, eb); }
-    put(box(0.4, 0.03, 0.05, lam(0x2c6b2f)), 0, -0.1, 0.33, head);
-  } else if (type === 'panda') {
-    const w = lam(0xf5f5f5); legMat = black; legs(0.17, 0.3);
-    put(sph(0.42, w, 1, 1.05, 0.92), 0, 0.62, 0, rig);
-    put(sph(0.15, black, 1, 1, 0.6), -0.37, 0.7, 0.1, rig); put(sph(0.15, black, 1, 1, 0.6), 0.37, 0.7, 0.1, rig);
-    const head = put(sph(0.35, w), 0, 1.2, 0, rig);
-    put(sph(0.12, black, 1, 1.2, 0.5), -0.14, 0.05, 0.29, head); put(sph(0.12, black, 1, 1.2, 0.5), 0.14, 0.05, 0.29, head);
-    put(sph(0.035, white), -0.14, 0.07, 0.35, head); put(sph(0.035, white), 0.14, 0.07, 0.35, head);
-    put(sph(0.05, black, 1.2, 0.8, 1), 0, -0.08, 0.34, head);
-    put(sph(0.12, black), -0.26, 0.28, 0, head); put(sph(0.12, black), 0.26, 0.28, 0, head);
-  } else if (type === 'robot') {
-    const g = lam(0xb7c0cc), dk = lam(0x4b5563), glow = bas(0x38e8ff); legMat = dk; legs(0.16, 0.3);
-    put(box(0.66, 0.6, 0.5, g), 0, 0.62, 0, rig); put(box(0.3, 0.16, 0.02, bas(0x38e8ff)), 0, 0.64, 0.26, rig);
-    put(box(0.14, 0.4, 0.14, dk), -0.42, 0.62, 0, rig); put(box(0.14, 0.4, 0.14, dk), 0.42, 0.62, 0, rig);
-    const head = put(box(0.54, 0.42, 0.44, lam(0xd5dbe3)), 0, 1.2, 0, rig);
-    put(box(0.12, 0.1, 0.02, glow), -0.12, 0.03, 0.23, head); put(box(0.12, 0.1, 0.02, glow), 0.12, 0.03, 0.23, head);
-    put(cyl(0.025, 0.25, dk), 0, 0.33, 0, head); put(sph(0.065, lam(0xff3b3b, { emissive: 0xaa1111 })), 0, 0.5, 0, head);
-  } else { // penguin
-    const dk = lam(0x23262d), or = lam(0xff9a1f); legMat = or; legs(0.2, 0.12);
-    put(sph(0.42, dk, 1, 1.15, 0.95), 0, 0.68, 0, rig); put(sph(0.33, white, 0.9, 1.05, 0.5), 0, 0.64, 0.25, rig);
-    put(sph(0.14, dk, 0.5, 1.5, 1), -0.42, 0.68, 0, rig); put(sph(0.14, dk, 0.5, 1.5, 1), 0.42, 0.68, 0, rig);
-    const head = put(sph(0.3, dk), 0, 1.25, 0, rig); eyes(head, 0.05, 0.25, 0.11, 0.045);
-    const beak = put(cone(0.07, 0.2, or), 0, -0.04, 0.34, head); beak.rotation.x = Math.PI / 2;
-  }
-  // team-colored scarf + ground ring so everyone can tell who owns what
-  const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.07, 8, 20), bas(team)); scarf.rotation.x = Math.PI / 2; scarf.position.y = 0.97; rig.add(scarf);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.68, 28), bas(team, { transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
-  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04; root.add(ring);
-  const aura = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.05, 8, 40), bas(0xffffff, { transparent: true, opacity: 0.9 }));
-  aura.rotation.x = Math.PI / 2; aura.position.y = 0.12; aura.visible = false; root.add(aura);
-  return { root, rig, legL, legR, aura };
-}
 
 function textSprite(text, { font = '600 30px system-ui,sans-serif', bubble = false, scale = 0.011 } = {}) {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -139,7 +68,7 @@ function textSprite(text, { font = '600 30px system-ui,sans-serif', bubble = fal
   else { x.lineWidth = 6; x.strokeStyle = 'rgba(0,0,0,.8)'; x.strokeText(text, tw / 2, 26, 660); x.fillStyle = '#fff'; x.fillText(text, tw / 2, 26, 660); }
   const t = new THREE.CanvasTexture(c);
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: false }));
-  s.scale.set(c.width * scale, c.height * scale, 1); s.renderOrder = 10; return s;
+  s.userData = { w: c.width, h: c.height, k: bubble ? 0.5 : 0.55 }; s.scale.set(1, 1, 1); s.renderOrder = 10; return s;
 }
 function disposeObj(o) {
   o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) { if (c.material.map) c.material.map.dispose(); c.material.dispose(); } });
@@ -149,11 +78,10 @@ function ensureAvatar(id) {
   const a = avatars[id], p = players[id]; if (!a || !p) return;
   if (a.char !== p.char || a.hue !== p.hue || a.name !== p.name) {
     if (a.g) { scene.remove(a.g.root); disposeObj(a.g.root); }
-    if (a.label) { a.g.root.remove(a.label); }
-    a.g = makeCharacter(p.char, p.hue); a.char = p.char; a.hue = p.hue; a.name = p.name;
-    a.label = textSprite(p.name); a.label.position.set(0, 1.95, 0); a.g.root.add(a.label);
+    a.g = makeCharacter(p.char, p.hue, LEAN); a.an = null; a.spd = 0; a.char = p.char; a.hue = p.hue; a.name = p.name;
+    a.label = textSprite(p.name); a.label.position.set(0, 2.35, 0); a.g.tilt.add(a.label);
     a.g.root.position.set(a.x, 0, a.y); scene.add(a.g.root);
-    a.faceT = 0; a.walk = 0; a.lx = a.x; a.ly = a.y;
+    a.faceT = 0; a.lx = a.x; a.ly = a.y;
   }
 }
 
@@ -164,7 +92,7 @@ function makePickup(type) {
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 3.2, 20, 1, true), bas(c, { transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
   const base = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.85, 32), bas(c, { side: THREE.DoubleSide }));
   base.rotation.x = -Math.PI / 2; base.position.y = 0.05; beam.position.y = 1.6;
-  const icon = textSprite(info.icon, { font: '56px sans-serif', scale: 0.016 }); icon.position.y = 2.15;
+  const icon = textSprite(info.icon, { font: '56px sans-serif' }); icon.userData.k = 0.55; icon.position.y = 2.15;
   const barGeo = new THREE.BoxGeometry(1.3, 0.14, 0.06); barGeo.translate(0.65, 0, 0);
   const bar = new THREE.Mesh(barGeo, bas(0x66ff99)); bar.position.set(-0.65, 2.75, 0); bar.renderOrder = 9;
   g.add(gem, beam, base, icon, bar);
@@ -189,6 +117,22 @@ function burst(x, z, color, size, life = 0.7) {
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), bas(color, { transparent: true, depthWrite: false }));
   flash.position.set(x, 0.6, z); scene.add(ring, flash);
   effects.push({ ring, flash, t: 0, life, size });
+}
+const puffs = [], PUFF_GEO = new THREE.CircleGeometry(0.16, 10);
+function spawnPuff(a) { // little dust cloud behind a foot when it lands
+  if (puffs.length > 60) return;
+  const ang = a.g.spin.rotation.y;
+  const m = new THREE.Mesh(PUFF_GEO, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(a.x - Math.sin(ang) * 0.3 + (Math.random() - 0.5) * 0.3, 0.07, a.y - Math.cos(ang) * 0.3 + (Math.random() - 0.5) * 0.3);
+  scene.add(m); puffs.push({ m, t: 0 });
+}
+function stepPuffs(dt) {
+  for (let i = puffs.length - 1; i >= 0; i--) {
+    const p = puffs[i]; p.t += dt; const f = p.t / 0.45;
+    if (f >= 1) { scene.remove(p.m); p.m.material.dispose(); puffs.splice(i, 1); continue; }
+    const s = 1 + f * 1.8; p.m.scale.set(s, s, s); p.m.material.opacity = 0.4 * (1 - f);
+  }
 }
 function stepEffects(dt) {
   for (let i = effects.length - 1; i >= 0; i--) {
@@ -235,7 +179,7 @@ function connect() {
     const m = JSON.parse(ev.data);
     if (m.t === 'init') onInit(m);
     else if (m.t === 'tile') {
-      const i = m.y * W + m.x; owner[i] = m.o; def[i] = m.d; paintTile(m.x, m.y); setBlock(i); updateMine();
+      const i = m.y * W + m.x; owner[i] = m.o; def[i] = m.d; paintTile(m.x, m.y); updateMine();
     } else if (m.t === 'player') {
       const hueChanged = !players[m.id];
       players[m.id] = { name: m.name, hue: m.hue, char: m.char };
@@ -246,6 +190,7 @@ function connect() {
         seen.add(id);
         const a = avatars[id] || (avatars[id] = { x, y });
         a.tx = x; a.ty = y;
+        if (Math.hypot(a.x - x, a.y - y) > 4) { a.x = x; a.y = y; a.lx = x; a.ly = y; }
         if (id === me) {
           const d = Math.hypot(x - mine.x, y - mine.y);
           if (d > 2) { mine.x = x; mine.y = y; } else { mine.x += (x - mine.x) * 0.1; mine.y += (y - mine.y) * 0.1; }
@@ -254,10 +199,14 @@ function connect() {
       for (const id in avatars) if (!seen.has(+id)) { const a = avatars[id]; if (a.g) { scene.remove(a.g.root); disposeObj(a.g.root); } delete avatars[id]; }
     } else if (m.t === 'chat') {
       const a = avatars[m.id]; if (!a || !a.g) return;
-      if (a.bubble) { a.g.root.remove(a.bubble); disposeObj(a.bubble); }
+      if (a.bubble) { a.g.tilt.remove(a.bubble); disposeObj(a.bubble); }
       a.bubble = textSprite(m.msg, { font: '28px system-ui,sans-serif', bubble: true, scale: 0.0105 });
-      a.bubble.position.set(0, 2.6, 0); a.g.root.add(a.bubble); a.bubbleUntil = performance.now() + 5000;
-    } else if (m.t === 'board') showBoard(m);
+      a.bubble.position.set(0, 2.9, 0); a.g.tilt.add(a.bubble); a.bubbleUntil = performance.now() + 5000;
+    } else if (m.t === 'board') { showBoard(m); round.n = m.n; round.phase = m.phase; round.endsAt = performance.now() + m.left; }
+    else if (m.t === 'roundEnd') onRoundEnd(m);
+    else if (m.t === 'rank') myRank = m;
+    else if (m.t === 'round') onNewRound(m);
+    else if (m.t === 'spawn') { mine = { x: m.x, y: m.y }; tgt.set(m.x, 0, m.y); for (const id in avatars) if (+id === me) { avatars[id].x = m.x; avatars[id].y = m.y; } }
     else if (m.t === 'err') flash(m.msg);
     else if (m.t === 'ok') { lastAct = performance.now(); cdUsed = m.cd; }
     else if (m.t === 'pickup+') addPickup(m);
@@ -284,9 +233,34 @@ function onInit(m) {
   const now = performance.now();
   for (const [id, fx] of Object.entries(m.fx)) { fxUntil[id] = {}; for (const [k, l] of Object.entries(fx)) fxUntil[id][k] = now + l; }
   mine = { x: m.x, y: m.y }; tgt.set(m.x, 0, m.y); sent = '0,0';
+  round.n = m.round.n; round.phase = m.round.phase; round.endsAt = performance.now() + m.round.left; myRank = null;
+  if (m.results) showResults(m.results); else $('results').style.display = 'none';
   const c = CFG.chars[myChar]; $('me').textContent = `${c.icon} ${c.name}`; $('perk').textContent = c.perk;
   updateMine();
   if (!started) { started = true; last = performance.now(); requestAnimationFrame(frame); }
+}
+function showResults(r) {
+  const top = r.board, win = top[0];
+  const rows = top.slice(0, 5).map((p, i) => `<div class="row${p.id === me ? ' you' : ''}"><b>${['🥇', '🥈', '🥉', '4', '5'][i]}</b><span class="dot" style="background:hsl(${p.hue},65%,52%)"></span><span class="n">${esc(p.name)}</span><b>${p.count}</b><span style="color:#8b95a8;width:42px;text-align:right">${Math.round(p.count / r.total * 100)}%</span></div>`).join('');
+  const mineRow = top.findIndex(p => p.id === me);
+  const youLine = mineRow >= 0 ? (mineRow === 0 ? '🎉 <b>You won!</b>' : `You finished #${mineRow + 1}`) : (myRank && myRank.rank ? `You finished #${myRank.rank} with ${myRank.count} tiles` : 'You didn\'t claim any tiles');
+  $('results').innerHTML = `<h2>Round ${r.n} complete</h2>` + (win ? `<div class="win">🏆 <b>${esc(win.name)}</b> wins with ${win.count} tiles!</div>${rows}` : '<div class="win">Nobody claimed anything!</div>') +
+    `<div style="margin-top:8px">${youLine}</div><div class="next">Next round in <b id="nextin">8</b>s</div>`;
+  $('results').style.display = 'block';
+}
+function onRoundEnd(m) {
+  round.phase = 'results'; round.endsAt = performance.now() + m.next;
+  for (const id in pickups) removePickup(id);
+  keys.clear(); padDir = [0, 0];
+  setTimeout(() => showResults(m), 250); // let the last tiles settle on screen first
+}
+function onNewRound(m) {
+  round.n = m.n; round.phase = 'play'; round.endsAt = performance.now() + m.left; myRank = null;
+  owner.fill(0); def.fill(0); repaintAll(); updateMine();
+  for (const id in pickups) removePickup(id);
+  for (const id in fxUntil) delete fxUntil[id];
+  $('results').style.display = 'none'; sent = '0,0'; follow = true; syncDir();
+  toast('🏁 Round ' + m.n + ' - GO!', '#66ff99');
 }
 function updateMine() { let n = 0; for (let i = 0; i < owner.length; i++) if (owner[i] === me) n++; $('mine').textContent = n; }
 
@@ -334,26 +308,27 @@ cv.onpointerdown = e => {
 };
 cv.onpointermove = e => {
   if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, [e.clientX, e.clientY]);
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]); dist = Math.max(6, Math.min(45, dist * pinch / d)); pinch = d; return; }
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]); dist = Math.max(8, Math.min(60, dist * pinch / d)); pinch = d; return; }
   if (!drag) return;
   const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
   if (Math.abs(dx) + Math.abs(dy) > 6) { drag.moved = true; follow = false; }
-  if (drag.moved) { const k = dist * 0.0017; tgt.x = Math.max(0, Math.min(W, drag.tx - dx * k)); tgt.z = Math.max(0, Math.min(H, drag.tz - dy * k * 1.5)); }
+  if (drag.moved) { const k = dist / innerHeight; tgt.x = Math.max(0, Math.min(W, drag.tx - dx * k)); tgt.z = Math.max(0, Math.min(H, drag.tz - dy * k / Math.sin(PITCH))); }
 };
 cv.onpointerup = cv.onpointercancel = e => {
   ptrs.delete(e.pointerId);
   drag = null;
 };
-cv.onwheel = e => { e.preventDefault(); dist = Math.max(6, Math.min(45, dist * (e.deltaY < 0 ? 0.9 : 1.1))); };
+cv.onwheel = e => { e.preventDefault(); dist = Math.max(8, Math.min(60, dist * (e.deltaY < 0 ? 0.9 : 1.1))); };
 
 // ---------- main loop ----------
 let last = 0, fxHtml = '';
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   if (renderer.domElement.width !== Math.floor(innerWidth * renderer.getPixelRatio())) {
-    renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight, false);
   }
-  const st = myStats(), d = curDir(), len = Math.hypot(d[0], d[1]);
+  { const hh = dist / 2, hw = hh * innerWidth / innerHeight; if (camera.top !== hh || camera.right !== hw) { camera.top = hh; camera.bottom = -hh; camera.right = hw; camera.left = -hw; camera.updateProjectionMatrix(); } }
+  const st = myStats(), d = curDir(), len = round.phase === 'play' ? Math.hypot(d[0], d[1]) : 0;
   if (len > 0) {
     mine.x = Math.max(0.5, Math.min(W - 0.5, mine.x + d[0] / len * st.speed * dt));
     mine.y = Math.max(0.5, Math.min(H - 0.5, mine.y + d[1] / len * st.speed * dt));
@@ -365,25 +340,28 @@ function frame(now) {
     else if (a.tx !== undefined) { a.x += (a.tx - a.x) * Math.min(1, dt * 12); a.y += (a.ty - a.y) * Math.min(1, dt * 12); }
     const vx = a.x - a.lx, vy = a.y - a.ly, sp = Math.hypot(vx, vy) / Math.max(dt, 0.001);
     a.lx = a.x; a.ly = a.y;
-    const moving = sp > 0.6;
-    if (moving) a.faceT = Math.atan2(vx, vy);
-    let diff = ((a.faceT || 0) - a.g.root.rotation.y + Math.PI * 3) % (Math.PI * 2) - Math.PI;
-    a.g.root.rotation.y += diff * Math.min(1, dt * 12);
-    a.walk += dt * Math.min(sp, 9) * 2.4;
-    const sw = moving ? Math.sin(a.walk) * 0.75 : 0;
-    a.g.legL.rotation.x = sw; a.g.legR.rotation.x = -sw;
-    a.g.rig.position.y = moving ? Math.abs(Math.sin(a.walk)) * 0.1 : Math.sin(now / 400 + +id) * 0.015;
+    a.spd += (sp - a.spd) * Math.min(1, dt * 10); // smoothed speed so animation doesn't jitter between network updates
+    if (sp > 0.6) a.faceT = Math.atan2(vx, vy);
+    const prevYaw = a.g.spin.rotation.y;
+    let diff = ((a.faceT || 0) - prevYaw + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+    a.g.spin.rotation.y += diff * Math.min(1, dt * 12);
+    const turnRate = (a.g.spin.rotation.y - prevYaw) / Math.max(dt, 0.001);
+    if (animateCharacter(a, dt, now, a.spd, turnRate) && Math.abs(a.x - tgt.x) < dist * 1.2 && Math.abs(a.y - tgt.z) < dist * 1.4) spawnPuff(a);
     a.g.root.position.set(a.x, 0, a.y);
-    a.g.root.visible = Math.hypot(a.x - tgt.x, a.y - tgt.z) < 55;
+    a.g.root.visible = Math.abs(a.x - tgt.x) < dist * 1.2 && Math.abs(a.y - tgt.z) < dist * 1.4;
     // boost aura
     const fx = fxUntil[id] || {}, act = Object.keys(fx).filter(k => fx[k] > now);
     a.g.aura.visible = act.length > 0;
     if (act.length) { a.g.aura.material.color.set(CFG.pickups[act[0]].color); const s = 1 + Math.sin(now / 150) * 0.08; a.g.aura.scale.set(s, s, s); }
-    if (a.bubble && now > a.bubbleUntil) { a.g.root.remove(a.bubble); disposeObj(a.bubble); a.bubble = null; }
+    if (a.bubble && now > a.bubbleUntil) { a.g.tilt.remove(a.bubble); disposeObj(a.bubble); a.bubble = null; }
+    if (a.bubble) a.bubble.position.y = 2.35 + 46 * (dist / innerHeight); // keep the bubble just above the name at any zoom
   }
   // camera
   if (follow) { tgt.x += (mine.x - tgt.x) * Math.min(1, dt * 8); tgt.z += (mine.y - tgt.z) * Math.min(1, dt * 8); }
-  camera.position.set(tgt.x, dist * 0.9, tgt.z + dist * 0.55); camera.lookAt(tgt.x, 0.4, tgt.z);
+  camera.position.set(tgt.x, 80 * Math.sin(PITCH), tgt.z + 80 * Math.cos(PITCH)); camera.lookAt(tgt.x, 0, tgt.z);
+  camera.updateMatrixWorld();
+  const upp = dist / innerHeight; // world units per screen pixel: keeps text the same size at any zoom
+  scene.traverse(o => { if (o.isSprite && o.userData.w) o.scale.set(o.userData.w * upp * o.userData.k, o.userData.h * upp * o.userData.k, 1); });
   // pickups: spin, bob, countdown bar, edge pins
   for (const id in pickups) {
     const o = pickups[id], left = o.expAt - now, f = Math.max(0, left / o.life);
@@ -399,12 +377,16 @@ function frame(now) {
       o.pin.style.opacity = o.g.visible ? 1 : 0.3;
     } else o.pin.style.display = 'none';
   }
-  stepEffects(dt);
-  // upload map texture / fort blocks at most ~10x per second
+  stepEffects(dt); stepPuffs(dt);
+  // upload map texture at most ~10x per second
   if (texDirty && now - texLast > 100) { tex.needsUpdate = true; texDirty = false; texLast = now; }
-  if (blkDirty) { blocks.instanceMatrix.needsUpdate = true; if (blocks.instanceColor) blocks.instanceColor.needsUpdate = true; blkDirty = false; }
   renderer.render(scene, camera);
   // HUD
+  { const left = Math.max(0, Math.ceil((round.endsAt - now) / 1000)), txt = round.phase === 'play' ? Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') : 'TIME!';
+    if ($('clock').textContent !== txt) $('clock').textContent = txt;
+    $('timer').classList.toggle('low', round.phase === 'play' && left <= 10);
+    $('roundn').textContent = 'Round ' + round.n;
+    const ni = $('nextin'); if (ni && round.phase !== 'play') ni.textContent = left; }
   $('fill').style.width = Math.min(1, (now - lastAct) / cdUsed) * 100 + '%';
   const fx = fxUntil[me] || {};
   const html = Object.keys(fx).filter(k => fx[k] > now).map(k => {

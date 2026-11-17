@@ -5,11 +5,13 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 // ================= Config (tweak these to change the game feel) =================
-const W = 160, H = 160;          // world size in tiles
+const W = 64, H = 64;            // world size in tiles (smaller = more fights)
 const COOLDOWN_MS = 800;         // base time between attacks on shielded tiles and fortify presses
 const MIN_COOLDOWN_MS = 120;     // fastest possible attack/fortify rate
 const MAX_DEF = 3;               // max fortification on a tile
-const SPEED = 5;                 // base walking speed, tiles per second
+const SPEED = 6.25;              // base walking speed, tiles per second (25% faster than before)
+const ROUND_MS = Number(process.env.ROUND_MS) || 60000;   // length of a round
+const RESULT_MS = Number(process.env.RESULT_MS) || 8000;  // how long the results screen shows between rounds
 const PICKUP_LIFE_MS = 15000;    // how long a boost stays on the map before vanishing
 const BOOST_MS = 15000;          // how long a collected boost lasts
 const EXPLOSION_TILES = 15;      // tiles taken by the Explosion boost
@@ -46,20 +48,18 @@ let nextId = 1;
 const newPlayerState = () => ({ count: 0, x: W / 2, y: H / 2, dx: 0, dy: 0, last: 0, online: 0, fx: {}, socks: new Set() });
 const savable = () => ({
   nextId,
-  players: [...players.values()].map(({ id, token, name, hue, char }) => ({ id, token, name, hue, char })),
-  owner: Array.from(owner), def: Array.from(def),
+  players: [...players.values()].map(({ id, token, name, hue, char, wins }) => ({ id, token, name, hue, char, wins: wins || 0 })),
 });
 function load() {
   try {
-    const s = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
-    s.players.forEach(p => {
+    const sv = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
+    sv.players.forEach(p => {
       players.set(p.id, { ...p, char: CHARS[p.char] ? p.char : CHAR_KEYS[p.id % CHAR_KEYS.length], ...newPlayerState() });
       tokens.set(p.token, p.id);
     });
-    nextId = s.nextId; owner.set(s.owner); def.set(s.def);
-    owner.forEach(o => { if (o && players.has(o)) players.get(o).count++; });
-    console.log('Loaded world', players.size, 'players');
-  } catch { /* fresh world */ }
+    nextId = sv.nextId;
+    console.log('Loaded', players.size, 'players');
+  } catch { /* fresh start */ }
 }
 function save() {
   fs.writeFile(SAVE_FILE + '.tmp', JSON.stringify(savable()), err => {
@@ -74,7 +74,7 @@ process.on('SIGINT', () => { fs.writeFileSync(SAVE_FILE, JSON.stringify(savable(
 const CONFIG = {
   chars: CHARS, pickups: PICKUPS,
   base: { speed: SPEED, cd: COOLDOWN_MS, minCd: MIN_COOLDOWN_MS },
-  haste: HASTE, rapid: RAPID, pickupLife: PICKUP_LIFE_MS, boostMs: BOOST_MS,
+  haste: HASTE, rapid: RAPID, pickupLife: PICKUP_LIFE_MS, boostMs: BOOST_MS, roundMs: ROUND_MS,
 };
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
@@ -124,7 +124,7 @@ function setTile(x, y, o, d) {
     if (prev && players.has(prev)) players.get(prev).count--;
     if (o && players.has(o)) players.get(o).count++;
   }
-  owner[i] = o; def[i] = d;
+  owner[i] = o; def[i] = d; mapDirty = true;
   broadcast({ t: 'tile', x, y, o, d });
 }
 
@@ -155,6 +155,7 @@ function stepOn(p, now) {
 }
 // Space: fortify your own tiles in the 3x3 around you
 function fortify(p, now) {
+  if (round.phase !== 'play') return 'Round over';
   const st = stats(p), tx = Math.floor(p.x), ty = Math.floor(p.y);
   if (now - p.last < st.cd) return 'Cooling down';
   let n = 0;
@@ -181,6 +182,7 @@ function pickType() {
   return 'rapid';
 }
 function spawnPickups() {
+  if (round.phase !== 'play') return;
   const on = online();
   if (!on.length) return;
   const max = Math.min(14, 3 + on.length * 2);
@@ -219,14 +221,55 @@ function leaderboard() {
     .sort((a, b) => b.count - a.count).slice(0, 10)
     .map(p => ({ id: p.id, name: p.name, hue: p.hue, count: p.count }));
 }
-setInterval(() => broadcast({ t: 'board', board: leaderboard(), online: online().length }), 2000);
+setInterval(() => broadcast({ t: 'board', board: leaderboard(), online: online().length, n: round.n, phase: round.phase, left: (round.phase === 'play' ? round.endsAt : round.resultsUntil) - Date.now() }), 1000);
+
+// ================= Rounds: 60s of play, then a results screen, then a fresh map =================
+const round = { n: 1, phase: 'play', endsAt: Date.now() + ROUND_MS, resultsUntil: 0, results: null };
+let mapDirty = false;
+function resetMap() {
+  owner.fill(0); def.fill(0); mapDirty = false; pickups.clear();
+  players.forEach(p => { p.count = 0; p.fx = {}; p.dx = 0; p.dy = 0; p.last = 0; });
+}
+function startRound() {
+  resetMap(); round.n++; round.phase = 'play'; round.endsAt = Date.now() + ROUND_MS; round.results = null;
+  for (const p of online()) {
+    p.x = 6 + Math.random() * (W - 12); p.y = 6 + Math.random() * (H - 12);
+    sendP(p, { t: 'spawn', x: p.x, y: p.y });
+  }
+  broadcast({ t: 'round', n: round.n, left: ROUND_MS });
+}
+function endRound() {
+  const ranked = [...players.values()].filter(p => p.count > 0).sort((a, b) => b.count - a.count);
+  if (ranked[0]) ranked[0].wins = (ranked[0].wins || 0) + 1;
+  round.phase = 'results'; round.resultsUntil = Date.now() + RESULT_MS; pickups.clear();
+  round.results = {
+    n: round.n, total: W * H,
+    board: ranked.slice(0, 8).map(p => ({ id: p.id, name: p.name, hue: p.hue, count: p.count, wins: p.wins || 0 })),
+  };
+  for (const p of online()) {
+    p.dx = p.dy = 0;
+    const r = ranked.indexOf(p);
+    sendP(p, { t: 'rank', rank: r < 0 ? 0 : r + 1, count: p.count, of: ranked.length });
+  }
+  broadcast({ t: 'roundEnd', ...round.results, next: RESULT_MS });
+  save();
+}
+setInterval(() => {
+  const now = Date.now();
+  if (!online().length) { // nobody here: keep a fresh, full-length round waiting
+    if (mapDirty || round.phase !== 'play') { resetMap(); round.phase = 'play'; round.results = null; }
+    round.endsAt = now + ROUND_MS; return;
+  }
+  if (round.phase === 'play' && now >= round.endsAt) endRound();
+  else if (round.phase === 'results' && now >= round.resultsUntil) startRound();
+}, 250);
 
 // Movement tick (20/s) + position broadcast (10/s) + pickup expiry/collection
 const TICK = 50;
 let tickN = 0;
 setInterval(() => {
   const now = Date.now();
-  for (const p of online()) {
+  for (const p of (round.phase === 'play' ? online() : [])) {
     const len = Math.hypot(p.dx, p.dy);
     if (len > 0) {
       const sp = stats(p).speed;
@@ -282,6 +325,8 @@ wss.on('connection', ws => {
         players: Object.fromEntries([...players.values()].map(p => [p.id, { name: p.name, hue: p.hue, char: p.char }])),
         pickups: [...pickups.values()].map(k => ({ id: k.id, type: k.type, x: k.x, y: k.y, left: k.exp - Date.now() })),
         fx: Object.fromEntries(online().map(p => [p.id, fxMsg(p).fx])),
+        round: { n: round.n, phase: round.phase, left: (round.phase === 'play' ? round.endsAt : round.resultsUntil) - Date.now() },
+        results: round.phase === 'results' ? round.results : null,
       });
       broadcast({ t: 'player', id: me.id, name: me.name, hue: me.hue, char: me.char });
     } else if (m.t === 'move' && me) {
