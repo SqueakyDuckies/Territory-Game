@@ -6,7 +6,9 @@ const PITCH = 66 * Math.PI / 180; // camera angle: 90 = straight down. Flat 2D m
 let CFG, W = 0, H = 0, owner, def, players = {}, me = 0, myChar = 'fox';
 let ws, follow = true, lastAct = 0, cdUsed = 800, started = false;
 const round = { n: 1, phase: 'play', endsAt: 0 }; let myRank = null;
-let mine = { x: 0, y: 0 };
+let mine = { x: 0, y: 0, kx: 0, ky: 0, tpUntil: 0, ignoreUntil: 0 };
+const setMine = (x, y) => { mine = { x, y, kx: 0, ky: 0, tpUntil: 0, ignoreUntil: 0 }; };
+let curMap = null, NEUTRAL = '#1a1f2a', myVote = null, voteCounts = {};
 const avatars = {}, pickups = {}, fxUntil = {}; // fxUntil[id][type] = performance.now() expiry
 const keys = new Set(); let padDir = [0, 0], sent = '0,0';
 let chosenChar = localStorage.getItem('char') || 'fox';
@@ -40,7 +42,7 @@ function buildWorld() {
 function paintTile(x, y) {
   const i = y * W + x, o = owner[i], p = players[o], d = def[i];
   const px = x * TS, py = y * TS;
-  tctx.fillStyle = o ? `hsl(${p ? p.hue : 0},${p ? 60 : 0}%,${p ? 46 : 32}%)` : '#1a1f2a';
+  tctx.fillStyle = o ? `hsl(${p ? p.hue : 0},${p ? 60 : 0}%,${p ? 46 : 32}%)` : NEUTRAL;
   tctx.fillRect(px, py, TS, TS);
   tctx.fillStyle = 'rgba(0,0,0,.30)'; // subtle grid line
   tctx.fillRect(px + TS - 1, py, 1, TS); tctx.fillRect(px, py + TS - 1, TS, 1);
@@ -78,36 +80,27 @@ function ensureAvatar(id) {
   const a = avatars[id], p = players[id]; if (!a || !p) return;
   if (a.char !== p.char || a.hue !== p.hue || a.name !== p.name) {
     if (a.g) { scene.remove(a.g.root); disposeObj(a.g.root); }
-    a.g = makeCharacter(p.char, p.hue, LEAN); a.an = null; a.spd = 0; a.char = p.char; a.hue = p.hue; a.name = p.name;
+    a.g = makeCharacter(p.char, p.hue, LEAN); a.an = null; a.spd = 0; a.orbs = {}; a.char = p.char; a.hue = p.hue; a.name = p.name;
     a.label = textSprite(p.name); a.label.position.set(0, 2.35, 0); a.g.tilt.add(a.label);
     a.g.root.position.set(a.x, 0, a.y); scene.add(a.g.root);
     a.faceT = 0; a.lx = a.x; a.ly = a.y;
   }
 }
 
-// ---------- boost pickups ----------
-function makePickup(type) {
-  const info = CFG.pickups[type], c = new THREE.Color(info.color), g = new THREE.Group();
-  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.42), new THREE.MeshLambertMaterial({ color: c, emissive: c, emissiveIntensity: 0.7 }));
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 3.2, 20, 1, true), bas(c, { transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
-  const base = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.85, 32), bas(c, { side: THREE.DoubleSide }));
-  base.rotation.x = -Math.PI / 2; base.position.y = 0.05; beam.position.y = 1.6;
-  const icon = textSprite(info.icon, { font: '56px sans-serif' }); icon.userData.k = 0.55; icon.position.y = 2.15;
-  const barGeo = new THREE.BoxGeometry(1.3, 0.14, 0.06); barGeo.translate(0.65, 0, 0);
-  const bar = new THREE.Mesh(barGeo, bas(0x66ff99)); bar.position.set(-0.65, 2.75, 0); bar.renderOrder = 9;
-  g.add(gem, beam, base, icon, bar);
-  return { g, gem, bar, icon };
-}
+// ---------- upgrade pickups (3D models live in scenery.js) ----------
 function addPickup(k) {
   if (pickups[k.id]) return;
-  const o = makePickup(k.type); Object.assign(o, { id: k.id, type: k.type, x: k.x, y: k.y, life: CFG.pickupLife, expAt: performance.now() + k.left });
-  o.g.position.set(k.x, 0, k.y); scene.add(o.g); pickups[k.id] = o;
-  const pin = document.createElement('div'); pin.textContent = CFG.pickups[k.type].icon; pin.style.borderColor = CFG.pickups[k.type].color; $('pins').appendChild(pin); o.pin = pin;
+  const info = CFG.pickups[k.type], now = performance.now();
+  const o = Scenery.makePickupModel(k.type, info.color, `${info.icon} ${info.name}`, LEAN);
+  Object.assign(o, { id: k.id, type: k.type, x: k.x, y: k.y, life: CFG.pickupLife, expAt: now + k.left, born: now, seed: Math.random() * 6 });
+  o.group.position.set(k.x, 0, k.y); o.group.scale.setScalar(0.01); scene.add(o.group); pickups[k.id] = o;
+  const pin = document.createElement('div'); pin.textContent = info.icon; pin.style.borderColor = info.color; $('pins').appendChild(pin); o.pin = pin;
 }
 function removePickup(id) {
   const o = pickups[id]; if (!o) return;
-  scene.remove(o.g); disposeObj(o.g); o.pin.remove(); delete pickups[id];
+  scene.remove(o.group); disposeObj(o.group); o.pin.remove(); delete pickups[id];
 }
+const easeOutBack = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
 
 // ---------- visual effects ----------
 const effects = [];
@@ -117,6 +110,23 @@ function burst(x, z, color, size, life = 0.7) {
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), bas(color, { transparent: true, depthWrite: false }));
   flash.position.set(x, 0.6, z); scene.add(ring, flash);
   effects.push({ ring, flash, t: 0, life, size });
+}
+const sparks = [], SPARK_GEO = new THREE.SphereGeometry(0.09, 6, 5);
+function sparkBurst(x, z, color, n = 14, speed = 4) { // little glowing bits that fly out and fall
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(SPARK_GEO, new THREE.MeshBasicMaterial({ color, transparent: true }));
+    const a = Math.random() * Math.PI * 2, s = speed * (0.5 + Math.random() * 0.7);
+    m.position.set(x, 0.6, z); scene.add(m);
+    sparks.push({ m, vx: Math.cos(a) * s, vz: Math.sin(a) * s, vy: 3 + Math.random() * 3, t: 0 });
+  }
+}
+function stepSparks(dt) {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i]; s.t += dt; s.vy -= 14 * dt;
+    s.m.position.x += s.vx * dt; s.m.position.z += s.vz * dt; s.m.position.y = Math.max(0.05, s.m.position.y + s.vy * dt);
+    s.m.material.opacity = Math.max(0, 1 - s.t / 0.75);
+    if (s.t > 0.75) { scene.remove(s.m); s.m.material.dispose(); sparks.splice(i, 1); }
+  }
 }
 const puffs = [], PUFF_GEO = new THREE.CircleGeometry(0.16, 10);
 function spawnPuff(a) { // little dust cloud behind a foot when it lands
@@ -193,7 +203,8 @@ function connect() {
         if (Math.hypot(a.x - x, a.y - y) > 4) { a.x = x; a.y = y; a.lx = x; a.ly = y; }
         if (id === me) {
           const d = Math.hypot(x - mine.x, y - mine.y);
-          if (d > 2) { mine.x = x; mine.y = y; } else { mine.x += (x - mine.x) * 0.1; mine.y += (y - mine.y) * 0.1; }
+          if (performance.now() < mine.ignoreUntil) { /* just teleported locally: wait for the server to catch up */ }
+          else if (d > 2) { mine.x = x; mine.y = y; } else { mine.x += (x - mine.x) * 0.1; mine.y += (y - mine.y) * 0.1; }
         }
       }
       for (const id in avatars) if (!seen.has(+id)) { const a = avatars[id]; if (a.g) { scene.remove(a.g.root); disposeObj(a.g.root); } delete avatars[id]; }
@@ -206,13 +217,19 @@ function connect() {
     else if (m.t === 'roundEnd') onRoundEnd(m);
     else if (m.t === 'rank') myRank = m;
     else if (m.t === 'round') onNewRound(m);
-    else if (m.t === 'spawn') { mine = { x: m.x, y: m.y }; tgt.set(m.x, 0, m.y); for (const id in avatars) if (+id === me) { avatars[id].x = m.x; avatars[id].y = m.y; } }
+    else if (m.t === 'spawn') { setMine(m.x, m.y); tgt.set(m.x, 0, m.y); for (const id in avatars) if (+id === me) { avatars[id].x = m.x; avatars[id].y = m.y; } }
+    else if (m.t === 'fling') { mine.kx = m.kx; mine.ky = m.ky; }
+    else if (m.t === 'portalfx') {
+      const c = new THREE.Color(m.color);
+      burst(m.from.x, m.from.y, c, 3, 0.5); burst(m.to.x, m.to.y, c, 3, 0.6); sparkBurst(m.from.x, m.from.y, c, 10, 3); sparkBurst(m.to.x, m.to.y, c, 10, 3);
+    } else if (m.t === 'vortexfx') { burst(m.x, m.y, new THREE.Color('#b07bff'), 4, 0.6); sparkBurst(m.x, m.y, new THREE.Color('#d9c2ff'), 12, 5); }
+    else if (m.t === 'votes') { voteCounts = m.counts; updateVotes(); }
     else if (m.t === 'err') flash(m.msg);
     else if (m.t === 'ok') { lastAct = performance.now(); cdUsed = m.cd; }
     else if (m.t === 'pickup+') addPickup(m);
     else if (m.t === 'pickup-') {
       const o = pickups[m.id];
-      if (o && m.by) burst(o.x, o.y, new THREE.Color(CFG.pickups[o.type].color), 3, 0.5);
+      if (o && m.by) { const c = new THREE.Color(CFG.pickups[o.type].color); burst(o.x, o.y, c, 3, 0.5); sparkBurst(o.x, o.y, c, 16, 4.5); }
       removePickup(m.id);
     } else if (m.t === 'fx') {
       const now = performance.now(); fxUntil[m.id] = {};
@@ -220,7 +237,7 @@ function connect() {
     } else if (m.t === 'got') {
       const info = CFG.pickups[m.type];
       toast(`${info.icon} ${info.name}! <span style="font-weight:400;font-size:13px">${info.desc}</span>`, info.color);
-    } else if (m.t === 'boom') burst(m.x, m.y, new THREE.Color(CFG.pickups.boom.color), 7, 0.8);
+    } else if (m.t === 'boom') { const c = new THREE.Color(CFG.pickups.boom.color); burst(m.x, m.y, c, 7, 0.8); sparkBurst(m.x, m.y, c, 28, 7); }
   };
 }
 
@@ -228,24 +245,46 @@ function onInit(m) {
   ({ w: W, h: H } = m); me = m.you; myChar = m.char; players = m.players;
   localStorage.setItem('token', m.token);
   owner = Uint16Array.from(m.owner); def = Uint8Array.from(m.def);
+  setMap(m.map);
   if (!started) buildWorld(); else repaintAll();
   for (const k of m.pickups) addPickup(k);
+  voteCounts = m.votes || {}; myVote = null;
   const now = performance.now();
   for (const [id, fx] of Object.entries(m.fx)) { fxUntil[id] = {}; for (const [k, l] of Object.entries(fx)) fxUntil[id][k] = now + l; }
-  mine = { x: m.x, y: m.y }; tgt.set(m.x, 0, m.y); sent = '0,0';
+  setMine(m.x, m.y); tgt.set(m.x, 0, m.y); sent = '0,0';
   round.n = m.round.n; round.phase = m.round.phase; round.endsAt = performance.now() + m.round.left; myRank = null;
   if (m.results) showResults(m.results); else $('results').style.display = 'none';
   const c = CFG.chars[myChar]; $('me').textContent = `${c.icon} ${c.name}`; $('perk').textContent = c.perk;
   updateMine();
   if (!started) { started = true; last = performance.now(); requestAnimationFrame(frame); }
 }
+function setMap(id) {
+  curMap = Shared.MAPS[id] || Shared.MAPS[Shared.MAP_IDS[0]]; NEUTRAL = curMap.ground;
+  Scenery.buildMap(scene, curMap, LEAN);
+  $('mapname').textContent = curMap.icon + ' ' + curMap.name;
+  if (tctx && owner) repaintAll();
+}
+function voteTags(mp) {
+  const t = []; if (mp.portals.length) t.push('🌀 ' + mp.portals.length / 2 + ' portal pairs');
+  if (mp.vortexes.length) t.push('🌪️ ' + mp.vortexes.length + ' vortex'); const sp = mp.zones.filter(z => z.type === 'speed').length, sl = mp.zones.filter(z => z.type === 'slow').length;
+  if (sp) t.push('⚡ ' + sp + ' boost lanes'); if (sl) t.push('🐌 ' + sl + ' mud'); return t.join(' · ');
+}
+function updateVotes() {
+  document.querySelectorAll('.vc').forEach(el => { el.classList.toggle('sel', el.dataset.m === myVote); el.querySelector('.cnt').textContent = voteCounts[el.dataset.m] || 0; });
+}
+function vote(id) { if (round.phase !== 'results' || !Shared.MAPS[id]) return; myVote = id; sendJ({ t: 'vote', map: id }); updateVotes(); }
 function showResults(r) {
   const top = r.board, win = top[0];
   const rows = top.slice(0, 5).map((p, i) => `<div class="row${p.id === me ? ' you' : ''}"><b>${['🥇', '🥈', '🥉', '4', '5'][i]}</b><span class="dot" style="background:hsl(${p.hue},65%,52%)"></span><span class="n">${esc(p.name)}</span><b>${p.count}</b><span style="color:#8b95a8;width:42px;text-align:right">${Math.round(p.count / r.total * 100)}%</span></div>`).join('');
   const mineRow = top.findIndex(p => p.id === me);
   const youLine = mineRow >= 0 ? (mineRow === 0 ? '🎉 <b>You won!</b>' : `You finished #${mineRow + 1}`) : (myRank && myRank.rank ? `You finished #${myRank.rank} with ${myRank.count} tiles` : 'You didn\'t claim any tiles');
+  voteCounts = r.counts || {}; myVote = null;
+  const cards = Shared.MAP_IDS.map((id, i) => { const mp = Shared.MAPS[id];
+    return `<div class="vc" data-m="${id}"><span class="key">${i + 1}</span><span class="cnt">0</span><canvas width="160" height="160"></canvas><b>${mp.icon} ${mp.name}</b><small>${voteTags(mp)}</small></div>`; }).join('');
   $('results').innerHTML = `<h2>Round ${r.n} complete</h2>` + (win ? `<div class="win">🏆 <b>${esc(win.name)}</b> wins with ${win.count} tiles!</div>${rows}` : '<div class="win">Nobody claimed anything!</div>') +
-    `<div style="margin-top:8px">${youLine}</div><div class="next">Next round in <b id="nextin">8</b>s</div>`;
+    `<div style="margin-top:8px">${youLine}</div><div class="votehdr">Vote for the next map</div><div id="vote">${cards}</div><div class="next">Next round in <b id="nextin">12</b>s</div>`;
+  document.querySelectorAll('.vc').forEach(el => { Scenery.drawPreview(el.querySelector('canvas'), Shared.MAPS[el.dataset.m]); el.onclick = () => vote(el.dataset.m); });
+  updateVotes();
   $('results').style.display = 'block';
 }
 function onRoundEnd(m) {
@@ -255,6 +294,7 @@ function onRoundEnd(m) {
   setTimeout(() => showResults(m), 250); // let the last tiles settle on screen first
 }
 function onNewRound(m) {
+  if (m.map) setMap(m.map); myVote = null;
   round.n = m.n; round.phase = 'play'; round.endsAt = performance.now() + m.left; myRank = null;
   owner.fill(0); def.fill(0); repaintAll(); updateMine();
   for (const id in pickups) removePickup(id);
@@ -285,6 +325,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (document.activeElement === $('name')) return;
+  if ($('results').style.display === 'block' && ['1', '2', '3'].includes(e.key)) { vote(Shared.MAP_IDS[+e.key - 1]); return; }
   if (e.key === 'Enter') { e.preventDefault(); $('chatin').focus(); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) sendJ({ t: 'fort' }); return; }
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { e.preventDefault(); keys.add(k); syncDir(); }
@@ -328,17 +369,18 @@ function frame(now) {
     renderer.setSize(innerWidth, innerHeight, false);
   }
   { const hh = dist / 2, hw = hh * innerWidth / innerHeight; if (camera.top !== hh || camera.right !== hw) { camera.top = hh; camera.bottom = -hh; camera.right = hw; camera.left = -hw; camera.updateProjectionMatrix(); } }
-  const st = myStats(), d = curDir(), len = round.phase === 'play' ? Math.hypot(d[0], d[1]) : 0;
-  if (len > 0) {
-    mine.x = Math.max(0.5, Math.min(W - 0.5, mine.x + d[0] / len * st.speed * dt));
-    mine.y = Math.max(0.5, Math.min(H - 0.5, mine.y + d[1] / len * st.speed * dt));
+  const st = myStats(), d = curDir();
+  if (round.phase === 'play') {
+    for (const ev of Shared.step(curMap, mine, dt, d[0], d[1], st.speed, now)) if (ev.tp) mine.ignoreUntil = now + 450;
   }
   // avatars
   for (const id in avatars) {
     const a = avatars[id]; ensureAvatar(+id); if (!a.g) continue;
     if (+id === me) { a.x = mine.x; a.y = mine.y; }
     else if (a.tx !== undefined) { a.x += (a.tx - a.x) * Math.min(1, dt * 12); a.y += (a.ty - a.y) * Math.min(1, dt * 12); }
-    const vx = a.x - a.lx, vy = a.y - a.ly, sp = Math.hypot(vx, vy) / Math.max(dt, 0.001);
+    let vx = a.x - a.lx, vy = a.y - a.ly;
+    if (Math.hypot(vx, vy) > 2) vx = vy = 0; // teleport / respawn / portal: a jump isn't running, don't animate it as speed
+    const sp = Math.min(14, Math.hypot(vx, vy) / Math.max(dt, 0.001));
     a.lx = a.x; a.ly = a.y;
     a.spd += (sp - a.spd) * Math.min(1, dt * 10); // smoothed speed so animation doesn't jitter between network updates
     if (sp > 0.6) a.faceT = Math.atan2(vx, vy);
@@ -353,6 +395,12 @@ function frame(now) {
     const fx = fxUntil[id] || {}, act = Object.keys(fx).filter(k => fx[k] > now);
     a.g.aura.visible = act.length > 0;
     if (act.length) { a.g.aura.material.color.set(CFG.pickups[act[0]].color); const s = 1 + Math.sin(now / 150) * 0.08; a.g.aura.scale.set(s, s, s); }
+    a.orbs = a.orbs || {};
+    for (const k of Object.keys(a.orbs)) if (!(fx[k] > now)) { a.g.root.remove(a.orbs[k]); disposeObj(a.orbs[k]); delete a.orbs[k]; }
+    act.forEach((k, i) => {
+      if (!a.orbs[k]) { a.orbs[k] = textSprite(CFG.pickups[k].icon, { font: '44px sans-serif' }); a.orbs[k].userData.k = 0.45; a.g.root.add(a.orbs[k]); }
+      const ang = now / 520 + i * (Math.PI * 2 / act.length); a.orbs[k].position.set(Math.cos(ang) * 1.05, 1.55 + Math.sin(now / 300 + i) * 0.08, Math.sin(ang) * 0.85);
+    });
     if (a.bubble && now > a.bubbleUntil) { a.g.tilt.remove(a.bubble); disposeObj(a.bubble); a.bubble = null; }
     if (a.bubble) a.bubble.position.y = 2.35 + 46 * (dist / innerHeight); // keep the bubble just above the name at any zoom
   }
@@ -362,22 +410,23 @@ function frame(now) {
   camera.updateMatrixWorld();
   const upp = dist / innerHeight; // world units per screen pixel: keeps text the same size at any zoom
   scene.traverse(o => { if (o.isSprite && o.userData.w) o.scale.set(o.userData.w * upp * o.userData.k, o.userData.h * upp * o.userData.k, 1); });
-  // pickups: spin, bob, countdown bar, edge pins
+  // upgrades: pop-in, spin/bob, countdown ring, name tag when close, edge pins
   for (const id in pickups) {
-    const o = pickups[id], left = o.expAt - now, f = Math.max(0, left / o.life);
-    o.gem.rotation.y += dt * 2.2; o.gem.position.y = 1.15 + Math.sin(now / 300 + +id) * 0.14;
-    o.bar.scale.x = Math.max(0.001, f); o.bar.material.color.set(f > 0.4 ? 0x66ff99 : f > 0.2 ? 0xffd23f : 0xff5555);
-    o.g.visible = left > 3000 || Math.floor(now / 160) % 2 === 0; // blink when about to vanish
+    const o = pickups[id], left = o.expAt - now, f = Math.max(0, Math.min(1, left / o.life)), age = (now - o.born) / 1000;
+    o.group.scale.setScalar(age < 0.4 ? Math.max(0.01, easeOutBack(age / 0.4)) : 1);
+    o.update(now, o.seed); o.setTimer(f);
+    o.group.visible = left > 3000 || Math.floor(now / 140) % 2 === 0; // blink when about to vanish
+    o.tag.visible = Math.hypot(o.x - mine.x, o.y - mine.y) < 5.5;
     _p.set(o.x, 1.2, o.y).project(camera);
     const off = Math.abs(_p.x) > 0.93 || Math.abs(_p.y) > 0.9 || _p.z > 1;
     if (off) {
       let sx = _p.x, sy = _p.y; if (_p.z > 1) { sx = -sx; sy = -sy; }
       const k = Math.max(Math.abs(sx) / 0.93, Math.abs(sy) / 0.9, 1); sx /= k; sy /= k;
       o.pin.style.display = 'flex'; o.pin.style.left = (sx * 0.5 + 0.5) * innerWidth + 'px'; o.pin.style.top = (-sy * 0.5 + 0.5) * innerHeight + 'px';
-      o.pin.style.opacity = o.g.visible ? 1 : 0.3;
+      o.pin.style.opacity = o.group.visible ? 1 : 0.3; o.pin.style.transform = `translate(-50%,-50%) scale(${1 + Math.sin(now / 200) * 0.06})`;
     } else o.pin.style.display = 'none';
   }
-  stepEffects(dt); stepPuffs(dt);
+  stepEffects(dt); stepPuffs(dt); stepSparks(dt); Scenery.updateMap(dt, now);
   // upload map texture at most ~10x per second
   if (texDirty && now - texLast > 100) { tex.needsUpdate = true; texDirty = false; texLast = now; }
   renderer.render(scene, camera);
@@ -388,14 +437,33 @@ function frame(now) {
     $('roundn').textContent = 'Round ' + round.n;
     const ni = $('nextin'); if (ni && round.phase !== 'play') ni.textContent = left; }
   $('fill').style.width = Math.min(1, (now - lastAct) / cdUsed) * 100 + '%';
-  const fx = fxUntil[me] || {};
-  const html = Object.keys(fx).filter(k => fx[k] > now).map(k => {
-    const i = CFG.pickups[k]; return `<div class="chip" style="border-color:${i.color};color:${i.color}">${i.icon} ${i.name} <span style="margin-left:auto">${Math.ceil((fx[k] - now) / 1000)}s</span></div>`;
-  }).join('');
-  if (html !== fxHtml) { $('fx').innerHTML = html; fxHtml = html; }
+  updateChips(now);
   requestAnimationFrame(frame);
 }
 
+const chipEls = {};
+function updateChips(now) {
+  const want = {}, fx = fxUntil[me] || {};
+  for (const k in fx) if (fx[k] > now) { const i = CFG.pickups[k]; want['fx:' + k] = { icon: i.icon, name: i.name, color: i.color, t: Math.ceil((fx[k] - now) / 1000) + 's', frac: (fx[k] - now) / CFG.boostMs }; }
+  if (curMap && round.phase === 'play') {
+    const zs = Shared.zonesAt(curMap, mine.x, mine.y);
+    if (zs.includes('speed')) want['z:speed'] = { icon: '⚡', name: 'Boost lane', color: '#9dff4f', t: '×1.6' };
+    if (zs.includes('slow')) want['z:slow'] = { icon: '🐌', name: 'Mud', color: '#c98be6', t: '×0.5' };
+    if (Shared.vortexAt(curMap, mine.x, mine.y)) want['z:vortex'] = { icon: '🌪️', name: 'Vortex pulling you!', color: '#b07bff', t: '' };
+  }
+  for (const k in chipEls) if (!want[k]) { chipEls[k].remove(); delete chipEls[k]; }
+  for (const k in want) {
+    const w = want[k]; let el = chipEls[k];
+    if (!el) {
+      el = chipEls[k] = document.createElement('div'); el.className = 'chip'; el.style.setProperty('--c', w.color);
+      el.innerHTML = `<span class="ico">${w.icon}</span><div class="mid"><b>${w.name}</b><div class="bar"><u></u></div></div><span class="t"></span>`;
+      $('fx').appendChild(el);
+    }
+    el.querySelector('.t').textContent = w.t;
+    const bar = el.querySelector('.bar'); bar.style.display = w.frac === undefined ? 'none' : 'block';
+    if (w.frac !== undefined) el.querySelector('u').style.width = Math.max(0, Math.min(1, w.frac)) * 100 + '%';
+  }
+}
 function showBoard(m) {
   $('online').textContent = m.online;
   $('rows').innerHTML = m.board.map(r =>
