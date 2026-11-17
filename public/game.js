@@ -7,7 +7,23 @@ let CFG, W = 0, H = 0, owner, def, players = {}, me = 0, myChar = 'fox';
 let ws, follow = true, lastAct = 0, cdUsed = 800, started = false;
 const round = { n: 1, phase: 'play', endsAt: 0 }; let myRank = null;
 let mine = { x: 0, y: 0, kx: 0, ky: 0, tpUntil: 0, ignoreUntil: 0 };
-const setMine = (x, y) => { mine = { x, y, kx: 0, ky: 0, tpUntil: 0, ignoreUntil: 0 }; };
+// Lag compensation: the server's position reports are old by the time they arrive, so we compare them with where WE were
+// back then (history), and hide whatever small correction is left by letting the picture slide instead of jump (vis).
+const hist = [], vis = { x: 0, y: 0 }; let rtt = 120;
+const setMine = (x, y) => { mine = { x, y, kx: 0, ky: 0, tpUntil: 0, ignoreUntil: 0 }; hist.length = 0; vis.x = vis.y = 0; };
+function histAt(t) { // where we were at client-time t (null if we have no record that old)
+  if (hist.length < 2 || t < hist[0][0] || t > hist[hist.length - 1][0]) return null;
+  for (let i = hist.length - 1; i > 0; i--) if (hist[i - 1][0] <= t) {
+    const a = hist[i - 1], b = hist[i], f = b[0] > a[0] ? (t - a[0]) / (b[0] - a[0]) : 0;
+    return { x: a[1] + (b[1] - a[1]) * f, y: a[2] + (b[2] - a[2]) * f };
+  }
+  return null;
+}
+function correct(cx, cy) { // move our real position, but keep what's on screen where it was
+  mine.x += cx; mine.y += cy;
+  for (const h of hist) { h[1] += cx; h[2] += cy; }
+  if (Math.hypot(cx, cy) > 6) { vis.x = vis.y = 0; } else { vis.x -= cx; vis.y -= cy; }
+}
 let curMap = null, NEUTRAL = '#1a1f2a', myVote = null, voteCounts = {};
 const avatars = {}, pickups = {}, fxUntil = {}; // fxUntil[id][type] = performance.now() expiry
 const keys = new Set(); let padDir = [0, 0], sent = '0,0';
@@ -183,8 +199,9 @@ const sendJ = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
 
 function connect() {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
-  ws.onopen = () => sendJ({ t: 'join', name: $('name').value, token: localStorage.getItem('token'), char: chosenChar });
-  ws.onclose = () => { flash('Disconnected - reconnecting...'); setTimeout(connect, 2000); };
+  clearInterval(connect.ping); connect.ping = setInterval(() => sendJ({ t: 'ping', c: performance.now() }), 1000);
+  ws.onopen = () => { sendJ({ t: 'ping', c: performance.now() }); sendJ({ t: 'join', name: $('name').value, token: localStorage.getItem('token'), char: chosenChar }); };
+  ws.onclose = () => { clearInterval(connect.ping); flash('Disconnected - reconnecting...'); setTimeout(connect, 2000); };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     if (m.t === 'init') onInit(m);
@@ -202,9 +219,11 @@ function connect() {
         a.tx = x; a.ty = y;
         if (Math.hypot(a.x - x, a.y - y) > 4) { a.x = x; a.y = y; a.lx = x; a.ly = y; }
         if (id === me) {
-          const d = Math.hypot(x - mine.x, y - mine.y);
-          if (performance.now() < mine.ignoreUntil) { /* just teleported locally: wait for the server to catch up */ }
-          else if (d > 2) { mine.x = x; mine.y = y; } else { mine.x += (x - mine.x) * 0.1; mine.y += (y - mine.y) * 0.1; }
+          const nowp = performance.now();
+          if (nowp >= mine.ignoreUntil && round.phase === 'play') {
+            const h = histAt(nowp - rtt - 25); // the server's snapshot reflects what we were doing about one round-trip ago
+            if (h) { const ex = x - h.x, ey = y - h.y, e = Math.hypot(ex, ey); if (e > 0.06) { const k = e > 1.5 ? 1 : 0.25; correct(ex * k, ey * k); } }
+          } else if (round.phase !== 'play') { mine.x = x; mine.y = y; vis.x = vis.y = 0; hist.length = 0; }
         }
       }
       for (const id in avatars) if (!seen.has(+id)) { const a = avatars[id]; if (a.g) { scene.remove(a.g.root); disposeObj(a.g.root); } delete avatars[id]; }
@@ -218,7 +237,12 @@ function connect() {
     else if (m.t === 'rank') myRank = m;
     else if (m.t === 'round') onNewRound(m);
     else if (m.t === 'spawn') { setMine(m.x, m.y); tgt.set(m.x, 0, m.y); for (const id in avatars) if (+id === me) { avatars[id].x = m.x; avatars[id].y = m.y; } }
-    else if (m.t === 'fling') { mine.kx = m.kx; mine.ky = m.ky; }
+    else if (m.t === 'pong') { rtt = rtt * 0.7 + (performance.now() - m.c) * 0.3; }
+    else if (m.t === 'fling') { // start the shove where the server did, and catch up for the time the message spent travelling
+      const k = Math.exp(-5 * rtt / 1000);
+      correct(m.x - mine.x + m.kx * (1 - k) / 5, m.y - mine.y + m.ky * (1 - k) / 5); // slide (not jump) to where the shove has already carried us
+      mine.kx = m.kx * k; mine.ky = m.ky * k; hist.length = 0;
+    }
     else if (m.t === 'portalfx') {
       const c = new THREE.Color(m.color);
       burst(m.from.x, m.from.y, c, 3, 0.5); burst(m.to.x, m.to.y, c, 3, 0.6); sparkBurst(m.from.x, m.from.y, c, 10, 3); sparkBurst(m.to.x, m.to.y, c, 10, 3);
@@ -371,12 +395,14 @@ function frame(now) {
   { const hh = dist / 2, hw = hh * innerWidth / innerHeight; if (camera.top !== hh || camera.right !== hw) { camera.top = hh; camera.bottom = -hh; camera.right = hw; camera.left = -hw; camera.updateProjectionMatrix(); } }
   const st = myStats(), d = curDir();
   if (round.phase === 'play') {
-    for (const ev of Shared.step(curMap, mine, dt, d[0], d[1], st.speed, now)) if (ev.tp) mine.ignoreUntil = now + 450;
+    for (const ev of Shared.step(curMap, mine, dt, d[0], d[1], st.speed, now)) if (ev.tp) { mine.ignoreUntil = now + 600; vis.x = vis.y = 0; hist.length = 0; }
+    hist.push([now, mine.x, mine.y]); while (hist.length > 2 && hist[0][0] < now - 1500) hist.shift();
   }
+  const dk = Math.exp(-dt * 10); vis.x *= dk; vis.y *= dk; // any leftover correction melts away in ~0.2s
   // avatars
   for (const id in avatars) {
     const a = avatars[id]; ensureAvatar(+id); if (!a.g) continue;
-    if (+id === me) { a.x = mine.x; a.y = mine.y; }
+    if (+id === me) { a.x = mine.x + vis.x; a.y = mine.y + vis.y; }
     else if (a.tx !== undefined) { a.x += (a.tx - a.x) * Math.min(1, dt * 12); a.y += (a.ty - a.y) * Math.min(1, dt * 12); }
     let vx = a.x - a.lx, vy = a.y - a.ly;
     if (Math.hypot(vx, vy) > 2) vx = vy = 0; // teleport / respawn / portal: a jump isn't running, don't animate it as speed
@@ -405,7 +431,7 @@ function frame(now) {
     if (a.bubble) a.bubble.position.y = 2.35 + 46 * (dist / innerHeight); // keep the bubble just above the name at any zoom
   }
   // camera
-  if (follow) { tgt.x += (mine.x - tgt.x) * Math.min(1, dt * 8); tgt.z += (mine.y - tgt.z) * Math.min(1, dt * 8); }
+  if (follow) { tgt.x += (mine.x + vis.x - tgt.x) * Math.min(1, dt * 8); tgt.z += (mine.y + vis.y - tgt.z) * Math.min(1, dt * 8); }
   camera.position.set(tgt.x, 80 * Math.sin(PITCH), tgt.z + 80 * Math.cos(PITCH)); camera.lookAt(tgt.x, 0, tgt.z);
   camera.updateMatrixWorld();
   const upp = dist / innerHeight; // world units per screen pixel: keeps text the same size at any zoom
@@ -447,7 +473,14 @@ function updateChips(now) {
   for (const k in fx) if (fx[k] > now) { const i = CFG.pickups[k]; want['fx:' + k] = { icon: i.icon, name: i.name, color: i.color, t: Math.ceil((fx[k] - now) / 1000) + 's', frac: (fx[k] - now) / CFG.boostMs }; }
   if (curMap && round.phase === 'play') {
     const zs = Shared.zonesAt(curMap, mine.x, mine.y);
-    if (zs.includes('speed')) want['z:speed'] = { icon: '⚡', name: 'Boost lane', color: '#9dff4f', t: '×1.6' };
+    const lane = Shared.laneAt(curMap, mine.x, mine.y);
+    if (lane) {
+      const dd = curDir(), l = Math.hypot(dd[0], dd[1]), m = l ? Shared.laneMult(lane, dd[0] / l, dd[1] / l) : 1, arrow = { 'x+': '→', 'x-': '←', 'y+': '↓', 'y-': '↑' }[lane.dir];
+      want['z:speed'] = !l ? { icon: '⚡', name: 'Boost lane ' + arrow, color: '#9dff4f', t: '' }
+        : m > 1.05 ? { icon: '⚡', name: 'Boost lane ' + arrow, color: '#9dff4f', t: '×' + m.toFixed(1) }
+        : m < 0.95 ? { icon: '⛔', name: 'Against the lane!', color: '#ff6b6b', t: '×' + m.toFixed(1) }
+        : { icon: '↔', name: 'Crossing the lane', color: '#c8d0dc', t: '' };
+    }
     if (zs.includes('slow')) want['z:slow'] = { icon: '🐌', name: 'Mud', color: '#c98be6', t: '×0.5' };
     if (Shared.vortexAt(curMap, mine.x, mine.y)) want['z:vortex'] = { icon: '🌪️', name: 'Vortex pulling you!', color: '#b07bff', t: '' };
   }
@@ -455,10 +488,11 @@ function updateChips(now) {
   for (const k in want) {
     const w = want[k]; let el = chipEls[k];
     if (!el) {
-      el = chipEls[k] = document.createElement('div'); el.className = 'chip'; el.style.setProperty('--c', w.color);
+      el = chipEls[k] = document.createElement('div'); el.className = 'chip';
       el.innerHTML = `<span class="ico">${w.icon}</span><div class="mid"><b>${w.name}</b><div class="bar"><u></u></div></div><span class="t"></span>`;
       $('fx').appendChild(el);
     }
+    el.style.setProperty('--c', w.color); el.querySelector('.ico').textContent = w.icon; el.querySelector('.mid b').textContent = w.name;
     el.querySelector('.t').textContent = w.t;
     const bar = el.querySelector('.bar'); bar.style.display = w.frac === undefined ? 'none' : 'block';
     if (w.frac !== undefined) el.querySelector('u').style.width = Math.max(0, Math.min(1, w.frac)) * 100 + '%';

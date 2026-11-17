@@ -5,7 +5,27 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 // ================= Config (tweak these to change the game feel) =================
-const Shared = require('./public/shared.js'); // maps + movement physics, same file the browser uses
+// The game files the browser needs. If one ended up in the repo root instead of public/, we still find it.
+const CLIENT_FILES = ['index.html', 'game.js', 'characters.js', 'scenery.js', 'shared.js', 'three.min.js'];
+const listDir = d => { try { return fs.readdirSync(d).join(', ') || '(empty)'; } catch { return '(folder not found)'; } };
+function findClientFile(name) {
+  for (const p of [path.join(__dirname, 'public', name), path.join(__dirname, name)]) if (fs.existsSync(p)) return p;
+  return null;
+}
+const sharedPath = findClientFile('shared.js');
+if (!sharedPath) { // say exactly what is wrong, in plain words, instead of a cryptic stack trace
+  console.error('\n==============================================================');
+  console.error('MISSING FILE: shared.js was not found in your repository.');
+  console.error('Upload it from the zip\'s public folder into the public folder on GitHub.');
+  console.error('What the server can see right now:');
+  console.error('  main folder : ' + listDir(__dirname));
+  console.error('  public/     : ' + listDir(path.join(__dirname, 'public')));
+  console.error('==============================================================\n');
+  process.exit(1);
+}
+const Shared = require(sharedPath); // maps + movement physics, same file the browser uses
+for (const f of CLIENT_FILES) if (!findClientFile(f)) console.error('WARNING: ' + f + ' is missing from the repo - the game will not work until it is uploaded to the public folder.');
+if (sharedPath !== path.join(__dirname, 'public', 'shared.js')) console.error('NOTE: shared.js is in the main folder instead of public/. It works, but please move it into public/.');
 const W = Shared.W, H = Shared.H;  // world size in tiles (set in public/shared.js)
 const COOLDOWN_MS = 800;         // base time between attacks on shielded tiles and fortify presses
 const MIN_COOLDOWN_MS = 120;     // fastest possible attack/fortify rate
@@ -86,8 +106,10 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify(CONFIG));
   }
   const f = req.url === '/' ? '/index.html' : req.url.split('?')[0];
-  const p = path.join(__dirname, 'public', path.normalize(f).replace(/^(\.\.[/\\])+/, ''));
+  let p = path.join(__dirname, 'public', path.normalize(f).replace(/^(\.\.[/\\])+/, ''));
   if (!p.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); return res.end(); }
+  const base = path.basename(p);
+  if (!fs.existsSync(p) && CLIENT_FILES.includes(base) && fs.existsSync(path.join(__dirname, base))) p = path.join(__dirname, base); // misplaced in the repo root
   fs.readFile(p, (err, buf) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream' });
@@ -134,7 +156,7 @@ function setTile(x, y, o, d) {
 // Claim (or attack) one tile a player is standing on. Neutral tiles and unshielded enemy tiles flip instantly;
 // shielded enemy tiles lose shield at the player's attack cooldown. Breaker ignores shields.
 function claimTile(p, x, y, st, primary, now) {
-  if (!inBounds(x, y)) return;
+  if (!inBounds(x, y) || Shared.isLaneTile(curMap(), x, y)) return; // boost lanes can never be claimed
   const i = idx(x, y), o = owner[i];
   if (o === p.id) return;
   const holder = o ? players.get(o) : null; // the owner standing on their tile holds it - nobody can take or hit it
@@ -150,7 +172,7 @@ function stepOn(p, now, x = p.x, y = p.y) {
   if (p.count === 0) { // new (or wiped-out) players get a free 3x3 start where they stand
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const nx = tx + dx, ny = ty + dy;
-      if (inBounds(nx, ny) && owner[idx(nx, ny)] === 0) setTile(nx, ny, p.id, 0);
+      if (inBounds(nx, ny) && owner[idx(nx, ny)] === 0 && !Shared.isLaneTile(curMap(), nx, ny)) setTile(nx, ny, p.id, 0);
     }
   }
   claimTile(p, tx, ty, st, true, now);
@@ -204,7 +226,7 @@ function explode(p) {
   const cands = [], cx = Math.floor(p.x), cy = Math.floor(p.y);
   for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
     const x = cx + dx, y = cy + dy;
-    if (!inBounds(x, y) || owner[idx(x, y)] === p.id) continue;
+    if (!inBounds(x, y) || owner[idx(x, y)] === p.id || Shared.isLaneTile(curMap(), x, y)) continue;
     cands.push([x, y, Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y)]);
   }
   cands.sort((a, b) => a[2] - b[2]);
@@ -231,7 +253,7 @@ setInterval(() => broadcast({ t: 'board', board: leaderboard(), online: online()
 // ================= Rounds: 60s of play, then a results screen, then a fresh map =================
 const votes = new Map(); // playerId -> mapId, collected on the results screen
 const tally = () => { const c = Object.fromEntries(Shared.MAP_IDS.map(id => [id, 0])); votes.forEach(m => c[m]++); return c; };
-const round = { n: 1, mapId: Shared.MAP_IDS[0], phase: 'play', endsAt: Date.now() + ROUND_MS, resultsUntil: 0, results: null };
+const round = { n: 1, mapId: Shared.MAPS[process.env.START_MAP] ? process.env.START_MAP : Shared.MAP_IDS[0], phase: 'play', endsAt: Date.now() + ROUND_MS, resultsUntil: 0, results: null };
 let mapDirty = false;
 function resetMap() {
   owner.fill(0); def.fill(0); mapDirty = false; pickups.clear();
@@ -276,12 +298,12 @@ setInterval(() => {
 
 // Movement tick (20/s) + position broadcast (10/s) + pickup expiry/collection
 const TICK = 50;
-let tickN = 0;
+let tickN = 0, lastTick = Date.now();
 setInterval(() => {
-  const now = Date.now();
+  const now = Date.now(), dt = Math.min(0.12, (now - lastTick) / 1000); lastTick = now;
   for (const p of (round.phase === 'play' ? online() : [])) {
     const ox = p.x, oy = p.y, map = curMap();
-    const evs = Shared.step(map, p, TICK / 1000, p.dx, p.dy, stats(p).speed, now);
+    const evs = Shared.step(map, p, dt, p.dx, p.dy, stats(p).speed, now);
     let teleported = false;
     for (const ev of evs) {
       if (ev.tp) { // portal: everyone sees the flash at both ends
@@ -290,7 +312,7 @@ setInterval(() => {
       } else if (ev.fling && now >= p.flingUntil) { // vortex spits you out in a random direction
         const ang = Math.random() * Math.PI * 2;
         p.flingUntil = now + 800; p.kx = Math.cos(ang) * Shared.FLING; p.ky = Math.sin(ang) * Shared.FLING;
-        sendP(p, { t: 'fling', kx: p.kx, ky: p.ky });
+        sendP(p, { t: 'fling', kx: p.kx, ky: p.ky, x: p.x, y: p.y });
         broadcast({ t: 'vortexfx', x: ev.fling.x, y: ev.fling.y });
       }
     }
@@ -306,7 +328,7 @@ setInterval(() => {
   for (const pk of pickups.values()) {
     if (pk.exp <= now) { pickups.delete(pk.id); broadcast({ t: 'pickup-', id: pk.id }); }
   }
-  if (++tickN % 2 === 0) {
+  {
     broadcast({ t: 'pos', p: online().map(p => [p.id, +p.x.toFixed(2), +p.y.toFixed(2)]) });
   }
 }, TICK);
@@ -360,6 +382,8 @@ wss.on('connection', ws => {
       if (!msg || now - lastChat < 1000) return;
       lastChat = now;
       broadcast({ t: 'chat', id: me.id, msg });
+    } else if (m.t === 'ping') {
+      send(ws, { t: 'pong', c: m.c });
     } else if (m.t === 'vote' && me) {
       if (round.phase !== 'results' || !Shared.MAPS[m.map]) return;
       votes.set(me.id, m.map); broadcast({ t: 'votes', counts: tally() });

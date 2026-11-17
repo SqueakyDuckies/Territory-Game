@@ -67,11 +67,22 @@
   const MAP_IDS = Object.keys(MAPS);
 
   const inRect = (z, x, y) => x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h;
-  function zoneMult(map, x, y) {
+  const LANE_VEC = { 'x+': [1, 0], 'x-': [-1, 0], 'y+': [0, 1], 'y-': [0, -1] };
+  // A boost lane only helps when you run WITH it: full boost going along it, half speed going against it,
+  // normal speed when crossing it sideways (smoothly blended for diagonals). ux,uy = your unit direction.
+  function laneMult(z, ux, uy) {
+    if (ux === undefined) return 1;
+    const v = LANE_VEC[z.dir] || [0, 0], dot = ux * v[0] + uy * v[1];
+    return dot >= 0 ? 1 + (SPEED_ZONE - 1) * dot : 1 + (1 - SLOW_ZONE) * dot;
+  }
+  function zoneMult(map, x, y, ux, uy) {
     let m = 1;
-    for (const z of map.zones) if (inRect(z, x, y)) m *= z.type === 'speed' ? SPEED_ZONE : SLOW_ZONE;
+    for (const z of map.zones) if (inRect(z, x, y)) m *= z.type === 'speed' ? laneMult(z, ux, uy) : SLOW_ZONE;
     return m;
   }
+  const laneAt = (map, x, y) => map.zones.find(z => z.type === 'speed' && inRect(z, x, y)) || null;
+  // Tiles under a boost lane can never be claimed
+  const isLaneTile = (map, tx, ty) => map.zones.some(z => z.type === 'speed' && inRect(z, tx + 0.5, ty + 0.5));
   function zonesAt(map, x, y) { return map.zones.filter(z => inRect(z, x, y)).map(z => z.type); }
   function vortexAt(map, x, y) { return map.vortexes.find(v => Math.hypot(v.x - x, v.y - y) < v.r) || null; }
 
@@ -83,6 +94,7 @@
       if (map.vortexes.some(v => Math.hypot(v.x - x, v.y - y) < v.r + 2)) continue;
       if (map.portals.some(p => Math.hypot(p.x - x, p.y - y) < 4)) continue;
       if (map.zones.some(z => z.type === 'slow' && inRect(z, x, y))) continue;
+      if (map.zones.some(z => z.type === 'speed' && inRect({ x: z.x - 2, y: z.y - 2, w: z.w + 4, h: z.h + 4 }, x, y))) continue; // keep the spawn patch off the lanes
       return { x, y };
     }
     return { x: W / 2, y: H / 2 };
@@ -93,7 +105,7 @@
     const ev = [];
     const len = Math.hypot(dx, dy);
     if (len > 0) {
-      const eff = Math.min(MAX_SPEED, speed * zoneMult(map, p.x, p.y));
+      const eff = Math.min(MAX_SPEED, speed * zoneMult(map, p.x, p.y, dx / len, dy / len));
       p.x += dx / len * eff * dt; p.y += dy / len * eff * dt;
     }
     for (const v of map.vortexes) { // pull toward the center, stronger near the middle
@@ -123,5 +135,5 @@
     return ev;
   }
 
-  return { W, H, MAPS, MAP_IDS, SPEED_ZONE, SLOW_ZONE, FLING, PORTAL_COOLDOWN, zoneMult, zonesAt, vortexAt, safeSpot, step };
+  return { W, H, MAPS, MAP_IDS, SPEED_ZONE, SLOW_ZONE, FLING, PORTAL_COOLDOWN, LANE_VEC, laneMult, laneAt, isLaneTile, zoneMult, zonesAt, vortexAt, safeSpot, step };
 });
