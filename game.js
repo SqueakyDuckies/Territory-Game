@@ -55,77 +55,9 @@ function paintTile(x, y) {
 function repaintAll() {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) paintTile(x, y);
 }
-// ---------- 3D characters (built from simple shapes) ----------
+// ---------- helpers (characters live in characters.js) ----------
 const lam = (c, o = {}) => new THREE.MeshLambertMaterial(Object.assign({ color: c }, o));
 const bas = (c, o = {}) => new THREE.MeshBasicMaterial(Object.assign({ color: c }, o));
-const sph = (r, mat, sx = 1, sy = 1, sz = 1) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14), mat); m.scale.set(sx, sy, sz); return m; };
-const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-const cone = (r, h, mat) => new THREE.Mesh(new THREE.ConeGeometry(r, h, 14), mat);
-const cyl = (r, h, mat) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 12), mat);
-const put = (m, x, y, z, parent) => { m.position.set(x, y, z); parent.add(m); return m; };
-
-function makeCharacter(type, hue) {
-  const root = new THREE.Group(), tilt = new THREE.Group(), spin = new THREE.Group(), rig = new THREE.Group();
-  root.add(tilt); tilt.add(spin); spin.add(rig); tilt.rotation.x = -LEAN; rig.scale.setScalar(1.3);
-  const team = col(hue, 0.75, 0.55);
-  const black = lam(0x15171c), white = lam(0xffffff);
-  const eyes = (parent, y, z, sx = 0.12, r = 0.045) => { put(sph(r, black), -sx, y, z, parent); put(sph(r, black), sx, y, z, parent); };
-  let legMat = lam(0x777777), legL, legR, legs = (w, h) => {
-    legL = new THREE.Group(); legR = new THREE.Group();
-    put(box(w, h, w, legMat), 0, -h / 2, 0, legL); put(box(w, h, w, legMat), 0, -h / 2, 0, legR);
-    put(legL, -0.17, 0.32, 0, rig); put(legR, 0.17, 0.32, 0, rig);
-  };
-  if (type === 'fox') {
-    const o = lam(0xe8833a), w = lam(0xfff1e0); legMat = lam(0x3a2a22); legs(0.15, 0.3);
-    put(sph(0.4, o, 1, 1.05, 0.9), 0, 0.62, 0, rig); put(sph(0.27, w, 0.9, 1, 0.5), 0, 0.6, 0.28, rig);
-    const head = put(sph(0.33, o), 0, 1.2, 0, rig);
-    put(sph(0.16, w, 1, 0.8, 1), 0, -0.07, 0.28, head); put(sph(0.04, black), 0, -0.02, 0.43, head); eyes(head, 0.06, 0.29);
-    const e1 = put(cone(0.1, 0.3, o), -0.18, 0.36, 0, head), e2 = put(cone(0.1, 0.3, o), 0.18, 0.36, 0, head); e1.rotation.z = 0.25; e2.rotation.z = -0.25;
-    const tail = put(cone(0.16, 0.6, o), 0, 0.5, -0.45, rig); tail.rotation.x = -1.9; put(sph(0.1, w), 0, -0.32, 0, tail);
-  } else if (type === 'cat') {
-    const g = lam(0x8d95a6), w = lam(0xe9ecf2), pink = lam(0xffa6b8); legMat = lam(0x6b7384); legs(0.14, 0.3);
-    put(sph(0.38, g, 1, 1.05, 0.9), 0, 0.62, 0, rig); put(sph(0.24, w, 0.9, 1, 0.5), 0, 0.6, 0.28, rig);
-    const head = put(sph(0.33, g), 0, 1.2, 0, rig); eyes(head, 0.04, 0.29, 0.13, 0.05);
-    put(sph(0.035, pink), 0, -0.05, 0.33, head);
-    const e1 = put(cone(0.11, 0.26, g), -0.2, 0.33, 0, head), e2 = put(cone(0.11, 0.26, g), 0.2, 0.33, 0, head); e1.rotation.z = 0.3; e2.rotation.z = -0.3;
-    const tail = put(cyl(0.05, 0.7, g), 0, 0.85, -0.42, rig); tail.rotation.x = -0.6;
-  } else if (type === 'frog') {
-    const g = lam(0x58b95a), lg = lam(0xbfe9a0); legMat = lam(0x3f8f42); legs(0.17, 0.28);
-    put(sph(0.43, g, 1.05, 0.95, 0.95), 0, 0.58, 0, rig); put(sph(0.3, lg, 0.9, 0.9, 0.5), 0, 0.52, 0.28, rig);
-    const head = put(sph(0.36, g, 1.15, 0.8, 1), 0, 1.12, 0.02, rig);
-    for (const s of [-1, 1]) { const eb = put(sph(0.14, g), 0.2 * s, 0.26, 0.04, head); put(sph(0.1, white), 0, 0.04, 0.07, eb); put(sph(0.05, black), 0, 0.04, 0.15, eb); }
-    put(box(0.4, 0.03, 0.05, lam(0x2c6b2f)), 0, -0.1, 0.33, head);
-  } else if (type === 'panda') {
-    const w = lam(0xf5f5f5); legMat = black; legs(0.17, 0.3);
-    put(sph(0.42, w, 1, 1.05, 0.92), 0, 0.62, 0, rig);
-    put(sph(0.15, black, 1, 1, 0.6), -0.37, 0.7, 0.1, rig); put(sph(0.15, black, 1, 1, 0.6), 0.37, 0.7, 0.1, rig);
-    const head = put(sph(0.35, w), 0, 1.2, 0, rig);
-    put(sph(0.12, black, 1, 1.2, 0.5), -0.14, 0.05, 0.29, head); put(sph(0.12, black, 1, 1.2, 0.5), 0.14, 0.05, 0.29, head);
-    put(sph(0.035, white), -0.14, 0.07, 0.35, head); put(sph(0.035, white), 0.14, 0.07, 0.35, head);
-    put(sph(0.05, black, 1.2, 0.8, 1), 0, -0.08, 0.34, head);
-    put(sph(0.12, black), -0.26, 0.28, 0, head); put(sph(0.12, black), 0.26, 0.28, 0, head);
-  } else if (type === 'robot') {
-    const g = lam(0xb7c0cc), dk = lam(0x4b5563), glow = bas(0x38e8ff); legMat = dk; legs(0.16, 0.3);
-    put(box(0.66, 0.6, 0.5, g), 0, 0.62, 0, rig); put(box(0.3, 0.16, 0.02, bas(0x38e8ff)), 0, 0.64, 0.26, rig);
-    put(box(0.14, 0.4, 0.14, dk), -0.42, 0.62, 0, rig); put(box(0.14, 0.4, 0.14, dk), 0.42, 0.62, 0, rig);
-    const head = put(box(0.54, 0.42, 0.44, lam(0xd5dbe3)), 0, 1.2, 0, rig);
-    put(box(0.12, 0.1, 0.02, glow), -0.12, 0.03, 0.23, head); put(box(0.12, 0.1, 0.02, glow), 0.12, 0.03, 0.23, head);
-    put(cyl(0.025, 0.25, dk), 0, 0.33, 0, head); put(sph(0.065, lam(0xff3b3b, { emissive: 0xaa1111 })), 0, 0.5, 0, head);
-  } else { // penguin
-    const dk = lam(0x23262d), or = lam(0xff9a1f); legMat = or; legs(0.2, 0.12);
-    put(sph(0.42, dk, 1, 1.15, 0.95), 0, 0.68, 0, rig); put(sph(0.33, white, 0.9, 1.05, 0.5), 0, 0.64, 0.25, rig);
-    put(sph(0.14, dk, 0.5, 1.5, 1), -0.42, 0.68, 0, rig); put(sph(0.14, dk, 0.5, 1.5, 1), 0.42, 0.68, 0, rig);
-    const head = put(sph(0.3, dk), 0, 1.25, 0, rig); eyes(head, 0.05, 0.25, 0.11, 0.045);
-    const beak = put(cone(0.07, 0.2, or), 0, -0.04, 0.34, head); beak.rotation.x = Math.PI / 2;
-  }
-  // team-colored scarf + ground ring so everyone can tell who owns what
-  const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.07, 8, 20), bas(team)); scarf.rotation.x = Math.PI / 2; scarf.position.y = 0.97; rig.add(scarf);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.65, 0.88, 28), bas(team, { transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
-  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04; root.add(ring);
-  const aura = new THREE.Mesh(new THREE.TorusGeometry(1.05, 0.06, 8, 40), bas(0xffffff, { transparent: true, opacity: 0.9 }));
-  aura.rotation.x = Math.PI / 2; aura.position.y = 0.12; aura.visible = false; root.add(aura);
-  return { root, tilt, spin, rig, legL, legR, aura };
-}
 
 function textSprite(text, { font = '600 30px system-ui,sans-serif', bubble = false, scale = 0.011 } = {}) {
   const c = document.createElement('canvas'), x = c.getContext('2d');
@@ -145,10 +77,10 @@ function ensureAvatar(id) {
   const a = avatars[id], p = players[id]; if (!a || !p) return;
   if (a.char !== p.char || a.hue !== p.hue || a.name !== p.name) {
     if (a.g) { scene.remove(a.g.root); disposeObj(a.g.root); }
-    a.g = makeCharacter(p.char, p.hue); a.char = p.char; a.hue = p.hue; a.name = p.name;
+    a.g = makeCharacter(p.char, p.hue, LEAN); a.an = null; a.spd = 0; a.char = p.char; a.hue = p.hue; a.name = p.name;
     a.label = textSprite(p.name); a.label.position.set(0, 2.35, 0); a.g.tilt.add(a.label);
     a.g.root.position.set(a.x, 0, a.y); scene.add(a.g.root);
-    a.faceT = 0; a.walk = 0; a.lx = a.x; a.ly = a.y;
+    a.faceT = 0; a.lx = a.x; a.ly = a.y;
   }
 }
 
@@ -184,6 +116,22 @@ function burst(x, z, color, size, life = 0.7) {
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), bas(color, { transparent: true, depthWrite: false }));
   flash.position.set(x, 0.6, z); scene.add(ring, flash);
   effects.push({ ring, flash, t: 0, life, size });
+}
+const puffs = [], PUFF_GEO = new THREE.CircleGeometry(0.16, 10);
+function spawnPuff(a) { // little dust cloud behind a foot when it lands
+  if (puffs.length > 60) return;
+  const ang = a.g.spin.rotation.y;
+  const m = new THREE.Mesh(PUFF_GEO, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(a.x - Math.sin(ang) * 0.3 + (Math.random() - 0.5) * 0.3, 0.07, a.y - Math.cos(ang) * 0.3 + (Math.random() - 0.5) * 0.3);
+  scene.add(m); puffs.push({ m, t: 0 });
+}
+function stepPuffs(dt) {
+  for (let i = puffs.length - 1; i >= 0; i--) {
+    const p = puffs[i]; p.t += dt; const f = p.t / 0.45;
+    if (f >= 1) { scene.remove(p.m); p.m.material.dispose(); puffs.splice(i, 1); continue; }
+    const s = 1 + f * 1.8; p.m.scale.set(s, s, s); p.m.material.opacity = 0.4 * (1 - f);
+  }
 }
 function stepEffects(dt) {
   for (let i = effects.length - 1; i >= 0; i--) {
@@ -361,14 +309,13 @@ function frame(now) {
     else if (a.tx !== undefined) { a.x += (a.tx - a.x) * Math.min(1, dt * 12); a.y += (a.ty - a.y) * Math.min(1, dt * 12); }
     const vx = a.x - a.lx, vy = a.y - a.ly, sp = Math.hypot(vx, vy) / Math.max(dt, 0.001);
     a.lx = a.x; a.ly = a.y;
-    const moving = sp > 0.6;
-    if (moving) a.faceT = Math.atan2(vx, vy);
-    let diff = ((a.faceT || 0) - a.g.spin.rotation.y + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+    a.spd += (sp - a.spd) * Math.min(1, dt * 10); // smoothed speed so animation doesn't jitter between network updates
+    if (sp > 0.6) a.faceT = Math.atan2(vx, vy);
+    const prevYaw = a.g.spin.rotation.y;
+    let diff = ((a.faceT || 0) - prevYaw + Math.PI * 3) % (Math.PI * 2) - Math.PI;
     a.g.spin.rotation.y += diff * Math.min(1, dt * 12);
-    a.walk += dt * Math.min(sp, 9) * 2.4;
-    const sw = moving ? Math.sin(a.walk) * 0.75 : 0;
-    a.g.legL.rotation.x = sw; a.g.legR.rotation.x = -sw;
-    a.g.rig.position.y = moving ? Math.abs(Math.sin(a.walk)) * 0.1 : Math.sin(now / 400 + +id) * 0.015;
+    const turnRate = (a.g.spin.rotation.y - prevYaw) / Math.max(dt, 0.001);
+    if (animateCharacter(a, dt, now, a.spd, turnRate) && Math.abs(a.x - tgt.x) < dist * 1.2 && Math.abs(a.y - tgt.z) < dist * 1.4) spawnPuff(a);
     a.g.root.position.set(a.x, 0, a.y);
     a.g.root.visible = Math.abs(a.x - tgt.x) < dist * 1.2 && Math.abs(a.y - tgt.z) < dist * 1.4;
     // boost aura
@@ -399,7 +346,7 @@ function frame(now) {
       o.pin.style.opacity = o.g.visible ? 1 : 0.3;
     } else o.pin.style.display = 'none';
   }
-  stepEffects(dt);
+  stepEffects(dt); stepPuffs(dt);
   // upload map texture at most ~10x per second
   if (texDirty && now - texLast > 100) { tex.needsUpdate = true; texDirty = false; texLast = now; }
   renderer.render(scene, camera);
