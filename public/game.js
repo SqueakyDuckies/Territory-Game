@@ -58,9 +58,9 @@ function buildWorld() {
 function paintTile(x, y) {
   const i = y * W + x, o = owner[i], p = players[o], d = def[i];
   const px = x * TS, py = y * TS;
-  tctx.fillStyle = o ? `hsl(${p ? p.hue : 0},${p ? 60 : 0}%,${p ? 46 : 32}%)` : NEUTRAL;
-  tctx.fillRect(px, py, TS, TS);
-  tctx.fillStyle = 'rgba(0,0,0,.30)'; // subtle grid line
+  Themes.paintNeutral(tctx, px, py, TS, x, y, curMap || { ground: NEUTRAL }); // the ground itself (water, grass, sand...)
+  if (o) { tctx.fillStyle = `hsla(${p ? p.hue : 0},${p ? 62 : 0}%,${p ? 47 : 32}%,0.88)`; tctx.fillRect(px, py, TS, TS); } // team colour on top, terrain still shows through
+  tctx.fillStyle = 'rgba(0,0,0,.22)'; // subtle grid line
   tctx.fillRect(px + TS - 1, py, 1, TS); tctx.fillRect(px, py + TS - 1, TS, 1);
   if (o && d > 0) { // shield level = thickness of the light border (1-3), tile also gets lighter
     const t = d * 2;
@@ -271,6 +271,7 @@ function onInit(m) {
   owner = Uint16Array.from(m.owner); def = Uint8Array.from(m.def);
   setMap(m.map);
   if (!started) buildWorld(); else repaintAll();
+  if (lowGfx) setLowGfx(true);
   for (const k of m.pickups) addPickup(k);
   voteCounts = m.votes || {}; myVote = null;
   const now = performance.now();
@@ -288,11 +289,7 @@ function setMap(id) {
   $('mapname').textContent = curMap.icon + ' ' + curMap.name;
   if (tctx && owner) repaintAll();
 }
-function voteTags(mp) {
-  const t = []; if (mp.portals.length) t.push('🌀 ' + mp.portals.length / 2 + ' portal pairs');
-  if (mp.vortexes.length) t.push('🌪️ ' + mp.vortexes.length + ' vortex'); const sp = mp.zones.filter(z => z.type === 'speed').length, sl = mp.zones.filter(z => z.type === 'slow').length;
-  if (sp) t.push('⚡ ' + sp + ' boost lanes'); if (sl) t.push('🐌 ' + sl + ' mud'); return t.join(' · ');
-}
+function voteTags(mp) { return mp.tag; }
 function updateVotes() {
   document.querySelectorAll('.vc').forEach(el => { el.classList.toggle('sel', el.dataset.m === myVote); el.querySelector('.cnt').textContent = voteCounts[el.dataset.m] || 0; });
 }
@@ -386,9 +383,16 @@ cv.onpointerup = cv.onpointercancel = e => {
 cv.onwheel = e => { e.preventDefault(); dist = Math.max(8, Math.min(60, dist * (e.deltaY < 0 ? 0.9 : 1.1))); };
 
 // ---------- main loop ----------
-let last = 0, fxHtml = '';
+let last = 0, fxHtml = '', fpsEma = 60, slowFor = 0, lowGfx = /[?&]low=1/.test(location.search);
+function setLowGfx(on, why) {
+  lowGfx = on; Scenery.setLow(on); renderer.setPixelRatio(on ? 1 : Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight, false);
+  if (why) toast('🐢 Low graphics on: ' + why + ' <span style="font-weight:400;font-size:13px">(add ?low=0 to the address to keep them on)</span>', '#ffd23f');
+}
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  { const inst = 1 / Math.max(0.001, (now - (frame.prev || now - 16)) / 1000); frame.prev = now; fpsEma += (Math.min(inst, 90) - fpsEma) * 0.05; // smoothed frames-per-second
+    if (!lowGfx && !/[?&]low=0/.test(location.search) && round.phase === 'play') { slowFor = fpsEma < 26 ? slowFor + dt : Math.max(0, slowFor - dt * 2); if (slowFor > 4) { setLowGfx(true, 'your device was struggling'); slowFor = 0; } } }
   if (renderer.domElement.width !== Math.floor(innerWidth * renderer.getPixelRatio())) {
     renderer.setSize(innerWidth, innerHeight, false);
   }
@@ -481,8 +485,8 @@ function updateChips(now) {
         : m < 0.95 ? { icon: '⛔', name: 'Against the lane!', color: '#ff6b6b', t: '×' + m.toFixed(1) }
         : { icon: '↔', name: 'Crossing the lane', color: '#c8d0dc', t: '' };
     }
-    if (zs.includes('slow')) want['z:slow'] = { icon: '🐌', name: 'Mud', color: '#c98be6', t: '×0.5' };
-    if (Shared.vortexAt(curMap, mine.x, mine.y)) want['z:vortex'] = { icon: '🌪️', name: 'Vortex pulling you!', color: '#b07bff', t: '' };
+    if (zs.includes('slow')) want['z:slow'] = { icon: '🐌', name: curMap.theme === 'swamp' ? 'Sticky mud' : 'Mud', color: curMap.theme === 'swamp' ? '#d9a56a' : '#c98be6', t: '×0.5' };
+    if (Shared.vortexAt(curMap, mine.x, mine.y)) want['z:vortex'] = { icon: '🌪️', name: curMap.theme === 'ocean' ? 'Whirlpool pulling you!' : 'Vortex pulling you!', color: '#b07bff', t: '' };
   }
   for (const k in chipEls) if (!want[k]) { chipEls[k].remove(); delete chipEls[k]; }
   for (const k in want) {

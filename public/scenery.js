@@ -2,7 +2,7 @@
 (function () {
   const T = THREE;
   const OUT = new T.MeshBasicMaterial({ color: 0x14161c, side: T.BackSide });
-  let group = null, scene = null; const updaters = [];
+  let group = null, scene = null, fancy = [], heavy = [], lowQuality = false; const updaters = [];
 
   const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
   const bas = (o) => new T.MeshBasicMaterial(Object.assign({ transparent: true, depthWrite: false }, o));
@@ -15,11 +15,11 @@
     r.addColorStop(0, hexA(color, 0.85)); r.addColorStop(0.45, hexA(color, 0.3)); r.addColorStop(1, hexA(color, 0));
     g.fillStyle = r; g.fillRect(0, 0, w, w);
   });
-  // spiral arms fading out toward the edge; dark = black-hole center
-  const spiralTex = (color, arms, dark) => canvasTex(256, 256, (g, w) => {
+  // spiral arms fading out toward the edge; dark = black-hole / deep-water centre. dk = { dark, mid } optional centre colours
+  const spiralTex = (color, arms, dark, dk) => canvasTex(256, 256, (g, w) => {
     g.translate(w / 2, w / 2);
     const r = g.createRadialGradient(0, 0, 0, 0, 0, w / 2);
-    r.addColorStop(0, dark ? 'rgba(4,0,12,0.95)' : hexA(color, 0.9)); r.addColorStop(0.2, dark ? 'rgba(20,4,40,0.6)' : hexA(color, 0.45)); r.addColorStop(1, hexA(color, 0));
+    r.addColorStop(0, dark ? (dk ? dk.dark : 'rgba(4,0,12,0.95)') : hexA(color, 0.9)); r.addColorStop(0.2, dark ? (dk ? dk.mid : 'rgba(20,4,40,0.6)') : hexA(color, 0.45)); r.addColorStop(1, hexA(color, 0));
     g.fillStyle = r; g.beginPath(); g.arc(0, 0, w / 2, 0, Math.PI * 2); g.fill();
     g.lineCap = 'round';
     for (let k = 0; k < arms; k++) for (let i = 0; i < 48; i++) {
@@ -29,51 +29,61 @@
       g.strokeStyle = `rgba(255,255,255,${0.5 * (1 - t0)})`; g.lineWidth = 2; g.stroke();
     }
   });
-  const chevronTex = (color, dir) => canvasTex(64, 64, (g, w) => {
-    g.fillStyle = hexA(color, 0.16); g.fillRect(0, 0, w, w);
+  // boost lane chevrons. road = themed look: dark asphalt with painted yellow arrows
+  const chevronTex = (color, dir, road) => canvasTex(64, 64, (g, w) => {
+    g.fillStyle = road ? road.road : hexA(color, 0.16); g.fillRect(0, 0, w, w);
     g.translate(w / 2, w / 2); g.rotate({ 'x+': 0, 'y+': Math.PI / 2, 'x-': Math.PI, 'y-': -Math.PI / 2 }[dir] || 0);
     g.lineCap = 'round'; g.lineJoin = 'round';
-    for (const [dx, a, lw] of [[-8, 0.35, 11], [12, 0.95, 9]]) {
+    for (const [dx, a, lw] of [[-8, 0.4, 11], [12, 1, 9]]) {
       g.beginPath(); g.moveTo(dx - 12, -17); g.lineTo(dx + 8, 0); g.lineTo(dx - 12, 17);
       g.strokeStyle = hexA(color, a); g.lineWidth = lw; g.stroke();
     }
   });
-  const mudTex = () => canvasTex(128, 128, (g, w) => {
-    g.fillStyle = 'rgba(74,34,84,0.58)'; g.fillRect(0, 0, w, w);
+  const mudTex = (m) => canvasTex(128, 128, (g, w) => {
+    g.fillStyle = m ? m.base : 'rgba(74,34,84,0.58)'; g.fillRect(0, 0, w, w);
     for (let i = 0; i < 26; i++) {
       const x = Math.random() * w, y = Math.random() * w, r = 4 + Math.random() * 12;
-      g.fillStyle = `rgba(30,10,40,${0.18 + Math.random() * 0.2})`; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
-      g.strokeStyle = 'rgba(200,140,230,0.4)'; g.lineWidth = 2; g.beginPath(); g.arc(x - r * 0.2, y - r * 0.2, r * 0.7, 3.4, 5.2); g.stroke();
+      g.fillStyle = m ? hexA(m.dark, 0.18 + Math.random() * 0.25) : `rgba(30,10,40,${0.18 + Math.random() * 0.2})`; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+      g.strokeStyle = m ? hexA(m.light, 0.45) : 'rgba(200,140,230,0.4)'; g.lineWidth = 2; g.beginPath(); g.arc(x - r * 0.2, y - r * 0.2, r * 0.7, 3.4, 5.2); g.stroke();
     }
   });
   const emojiTex = e => canvasTex(128, 128, (g, w) => { g.font = '90px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(e, w / 2, w / 2 + 6); });
   const flat = (mesh, y) => { mesh.rotation.x = -Math.PI / 2; mesh.position.y = y; return mesh; };
 
   // ---------------- map hazards ----------------
-  function makeZone(z) {
+  function makeZone(z, st) {
     const g = new T.Group(); g.position.set(z.x + z.w / 2, 0.02, z.y + z.h / 2);
-    const speed = z.type === 'speed', col = speed ? '#9dff4f' : '#b070d0';
-    const tex = speed ? chevronTex(col, z.dir) : mudTex();
+    const speed = z.type === 'speed', road = st.lane, mud = st.mud, oval = z.shape === 'ellipse';
+    const col = speed ? (road ? road.chevron : '#9dff4f') : '#b070d0';
+    const tex = speed ? chevronTex(col, z.dir, road) : mudTex(mud);
     tex.wrapS = tex.wrapT = T.RepeatWrapping; tex.repeat.set(speed ? Math.max(1, z.w / 2) : Math.max(1, z.w / 3), speed ? Math.max(1, z.h / 2) : Math.max(1, z.h / 3));
-    g.add(flat(new T.Mesh(new T.PlaneGeometry(z.w, z.h), bas({ map: tex })), 0));
-    const edge = new T.LineSegments(new T.EdgesGeometry(new T.PlaneGeometry(z.w, z.h)), new T.LineBasicMaterial({ color: col, transparent: true, opacity: 0.75 }));
-    g.add(flat(edge, 0.01));
-    const icon = flat(new T.Mesh(new T.PlaneGeometry(2.2, 2.2), bas({ map: emojiTex(speed ? '⚡' : '🐌'), opacity: 0.6 })), 0.015); g.add(icon);
+    if (oval) { // a natural-looking pond: a wet dark halo, the mud itself, and a lighter rim
+      const rx = z.w / 2, ry = z.h / 2;
+      const halo = flat(new T.Mesh(new T.CircleGeometry(1, 48), bas({ color: mud ? mud.rim : 0x000000, opacity: 0.4 })), -0.012); halo.scale.set(rx * 1.07, ry * 1.1, 1); g.add(halo);
+      const body = flat(new T.Mesh(new T.CircleGeometry(1, 48), bas({ map: tex, opacity: 0.97 })), 0); body.scale.set(rx, ry, 1); g.add(body);
+      const rim = flat(new T.Mesh(new T.RingGeometry(0.96, 1, 48), bas({ color: mud ? mud.edge : 0xffffff, opacity: 0.55, side: T.DoubleSide })), 0.01); rim.scale.set(rx, ry, 1); g.add(rim);
+    } else {
+      g.add(flat(new T.Mesh(new T.PlaneGeometry(z.w, z.h), bas({ map: tex })), 0));
+      const edge = new T.LineSegments(new T.EdgesGeometry(new T.PlaneGeometry(z.w, z.h)), new T.LineBasicMaterial({ color: road ? road.edge : col, transparent: true, opacity: 0.8 }));
+      g.add(flat(edge, 0.01));
+    }
+    const icon = (!road && !mud) ? flat(new T.Mesh(new T.PlaneGeometry(2.2, 2.2), bas({ map: emojiTex(speed ? '⚡' : '🐌'), opacity: 0.6 })), 0.015) : null; if (icon) g.add(icon);
     const mv = { 'x+': [-1, 0], 'x-': [1, 0], 'y+': [0, 1], 'y-': [0, -1] }[z.dir] || [0, 0];
     updaters.push((dt, now) => {
       if (speed) { tex.offset.x += mv[0] * dt * 0.9; tex.offset.y += mv[1] * dt * 0.9; } // chevrons stream along the lane
       else { tex.offset.x += dt * 0.05; tex.offset.y -= dt * 0.035; }                   // mud slowly churns
-      icon.material.opacity = 0.45 + Math.sin(now / 500) * 0.12;
+      if (icon) icon.material.opacity = 0.45 + Math.sin(now / 500) * 0.12;
     });
     return g;
   }
-  function makeVortex(v, color) {
-    const g = new T.Group(); g.position.set(v.x, 0.04, v.y);
-    const spiral = flat(new T.Mesh(new T.CircleGeometry(v.r, 72), bas({ map: spiralTex('#b07bff', 4, true) })), 0); g.add(spiral);
-    g.add(flat(new T.Mesh(new T.RingGeometry(v.r - 0.1, v.r, 72), bas({ color: 0xb07bff, opacity: 0.4, side: T.DoubleSide })), 0.01));
-    const rings = [0, 1, 2].map(() => { const r = flat(new T.Mesh(new T.RingGeometry(0.96, 1, 64), bas({ color: 0xe6d4ff, side: T.DoubleSide })), 0.02); g.add(r); return r; });
+  function makeVortex(v, color, st) {
+    const vs = st.vortex, g = new T.Group(); g.position.set(v.x, 0.04, v.y);
+    const spiral = flat(new T.Mesh(new T.CircleGeometry(v.r, 72), bas({ map: spiralTex(vs ? vs.glow : '#b07bff', 4, true, vs) })), 0); g.add(spiral);
+    if (vs) { const fa = flat(new T.Mesh(new T.CircleGeometry(v.r, 72), bas({ map: spiralTex(vs.arm, 3, false), blending: T.AdditiveBlending, opacity: 0.55 })), 0.005); g.add(fa); spiral.userData.foam = fa; }
+    g.add(flat(new T.Mesh(new T.RingGeometry(v.r - 0.1, v.r, 72), bas({ color: vs ? vs.boundary : 0xb07bff, opacity: vs ? 0.55 : 0.4, side: T.DoubleSide })), 0.01));
+    const rings = [0, 1, 2].map(() => { const r = flat(new T.Mesh(new T.RingGeometry(0.96, 1, 64), bas({ color: vs ? vs.ring : 0xe6d4ff, side: T.DoubleSide })), 0.02); g.add(r); return r; });
     updaters.push((dt, now) => {
-      spiral.rotation.z -= dt * 1.4;
+      spiral.rotation.z -= dt * 1.4; if (spiral.userData.foam) spiral.userData.foam.rotation.z -= dt * 1.9;
       rings.forEach((r, i) => { const f = ((now / 1700) + i / 3) % 1, s = v.r * (1 - f) + 0.6; r.scale.set(s, s, s); r.material.opacity = 0.65 * Math.sin(f * Math.PI); }); // rings drain inward
     });
     return g;
@@ -97,31 +107,43 @@
 
   function buildMap(sc, map, lean) {
     clearMap(); scene = sc; group = new T.Group();
-    map.zones.forEach(z => group.add(makeZone(z)));
-    map.vortexes.forEach(v => group.add(makeVortex(v, map.accent)));
+    const st = Themes.style(map);
+    map.zones.forEach(z => group.add(makeZone(z, st)));
+    map.vortexes.forEach(v => group.add(makeVortex(v, map.accent, st)));
     map.portals.forEach(p => group.add(makePortal(p, lean)));
+    const th = Themes.build(map, lean); group.add(th.group); updaters.push(th.update); sc.background = new T.Color(th.bg);
+    fancy = th.fancy || []; heavy = th.heavy || []; heavy.forEach(b => { b.full = b.mesh.count; }); applyQuality();
     scene.add(group);
   }
   function clearMap() {
     updaters.length = 0;
     if (!group) return;
     scene.remove(group);
-    group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
-    group = null;
+    group.traverse(o => { if (o.isInstancedMesh) o.dispose(); if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+    group = null; fancy = []; heavy = [];
   }
   const updateMap = (dt, now) => updaters.forEach(f => f(dt, now));
 
   // ---------------- map preview (used by the vote cards) ----------------
   function drawPreview(canvas, map) {
-    const g = canvas.getContext('2d'), s = canvas.width / 64;
+    const g = canvas.getContext('2d'), s = canvas.width / 64, st = Themes.style(map);
     g.fillStyle = map.ground; g.fillRect(0, 0, canvas.width, canvas.height);
-    g.strokeStyle = 'rgba(255,255,255,0.05)'; g.lineWidth = 1;
-    for (let i = 0; i <= 64; i += 8) { g.beginPath(); g.moveTo(i * s, 0); g.lineTo(i * s, canvas.height); g.moveTo(0, i * s); g.lineTo(canvas.width, i * s); g.stroke(); }
-    for (const z of map.zones) { g.fillStyle = z.type === 'speed' ? 'rgba(157,255,79,0.65)' : 'rgba(176,112,208,0.65)'; g.fillRect(z.x * s, z.y * s, z.w * s, z.h * s); }
+    // a little of the theme's scenery as dots, so each card feels different
+    let seed = map.id.length * 977; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const dots = { ocean: ['#ff7aa8', '#ff9a4d', '#b983ff', '#7d8fa3'], swamp: ['#2f6a35', '#3f8a45', '#d9382f', '#ffd23f'], canyon: ['#b5532c', '#4f8a45', '#8a9360', '#a8472a'] }[map.theme] || [];
+    for (let i = 0; i < 70; i++) { const x = rnd() * 64, y = rnd() * 64; g.fillStyle = dots[Math.floor(rnd() * dots.length)] || '#fff'; g.globalAlpha = 0.5; g.beginPath(); g.arc(x * s, y * s, (0.5 + rnd() * 0.9) * s, 0, 7); g.fill(); }
+    g.globalAlpha = 1;
+    for (const z of map.zones) {
+      if (z.type === 'speed') { g.fillStyle = st.lane ? 'rgba(46,38,34,0.9)' : 'rgba(157,255,79,0.65)'; g.fillRect(z.x * s, z.y * s, z.w * s, z.h * s);
+        if (st.lane) { g.strokeStyle = st.lane.chevron; g.lineWidth = Math.max(1, s * 0.5); g.setLineDash([s * 1.5, s * 1.2]); g.beginPath(); const hz = z.w > z.h; g.moveTo((z.x + (hz ? 0 : z.w / 2)) * s, (z.y + (hz ? z.h / 2 : 0)) * s); g.lineTo((z.x + (hz ? z.w : z.w / 2)) * s, (z.y + (hz ? z.h / 2 : z.h)) * s); g.stroke(); g.setLineDash([]); } }
+      else { g.fillStyle = st.mud ? st.mud.base : 'rgba(176,112,208,0.65)'; g.strokeStyle = st.mud ? st.mud.edge : 'rgba(0,0,0,0)';
+        if (z.shape === 'ellipse') { g.beginPath(); g.ellipse((z.x + z.w / 2) * s, (z.y + z.h / 2) * s, z.w / 2 * s, z.h / 2 * s, 0, 0, 7); g.fill(); g.lineWidth = 1; g.stroke(); } else g.fillRect(z.x * s, z.y * s, z.w * s, z.h * s); }
+    }
     for (const v of map.vortexes) {
-      const r = g.createRadialGradient(v.x * s, v.y * s, 0, v.x * s, v.y * s, v.r * s);
-      r.addColorStop(0, 'rgba(0,0,0,0.95)'); r.addColorStop(0.5, 'rgba(120,60,200,0.65)'); r.addColorStop(1, 'rgba(176,123,255,0.1)');
+      const r = g.createRadialGradient(v.x * s, v.y * s, 0, v.x * s, v.y * s, v.r * s), vs = st.vortex;
+      r.addColorStop(0, vs ? 'rgba(2,24,52,0.98)' : 'rgba(0,0,0,0.95)'); r.addColorStop(0.5, vs ? 'rgba(90,200,240,0.7)' : 'rgba(120,60,200,0.65)'); r.addColorStop(1, vs ? 'rgba(230,255,255,0.35)' : 'rgba(176,123,255,0.1)');
       g.fillStyle = r; g.beginPath(); g.arc(v.x * s, v.y * s, v.r * s, 0, 7); g.fill();
+      if (vs) { g.strokeStyle = 'rgba(255,255,255,0.8)'; g.lineWidth = Math.max(1, s * 0.4); for (let k = 0; k < 3; k++) { g.beginPath(); for (let i = 0; i <= 24; i++) { const t = i / 24, a = k * 2.09 + t * 5, rr = v.r * s * (0.15 + t * 0.8); const x = v.x * s + Math.cos(a) * rr, y = v.y * s + Math.sin(a) * rr; i ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke(); } }
     }
     for (const p of map.portals) {
       g.fillStyle = p.color; g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.arc(p.x * s, p.y * s, 3.2 * s / 1.6, 0, 7); g.fill(); g.stroke();
@@ -213,5 +235,8 @@
     };
   }
 
-  window.Scenery = { buildMap, clearMap, updateMap, drawPreview, makePickupModel, labelSprite };
+  // Low graphics: hide fog / light shimmer / ambient critters (the map and rules are unchanged)
+  function applyQuality() { fancy.forEach(o => { o.visible = !lowQuality; }); heavy.forEach(b => { b.mesh.count = lowQuality ? Math.ceil(b.full * 0.33) : b.full; }); } // low graphics keeps a third of the scenery
+  function setLow(on) { lowQuality = on; applyQuality(); }
+  window.Scenery = { setLow, buildMap, clearMap, updateMap, drawPreview, makePickupModel, labelSprite };
 })();

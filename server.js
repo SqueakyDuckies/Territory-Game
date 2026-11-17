@@ -6,7 +6,7 @@ const { WebSocketServer } = require('ws');
 
 // ================= Config (tweak these to change the game feel) =================
 // The game files the browser needs. If one ended up in the repo root instead of public/, we still find it.
-const CLIENT_FILES = ['index.html', 'game.js', 'characters.js', 'scenery.js', 'shared.js', 'three.min.js'];
+const CLIENT_FILES = ['index.html', 'game.js', 'characters.js', 'scenery.js', 'themes.js', 'shared.js', 'three.min.js'];
 const listDir = d => { try { return fs.readdirSync(d).join(', ') || '(empty)'; } catch { return '(folder not found)'; } };
 function findClientFile(name) {
   for (const p of [path.join(__dirname, 'public', name), path.join(__dirname, name)]) if (fs.existsSync(p)) return p;
@@ -105,7 +105,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(CONFIG));
   }
-  const f = req.url === '/' ? '/index.html' : req.url.split('?')[0];
+  const urlPath = req.url.split('?')[0], f = urlPath === '/' ? '/index.html' : urlPath; // ignore ?tags added by shared links
   let p = path.join(__dirname, 'public', path.normalize(f).replace(/^(\.\.[/\\])+/, ''));
   if (!p.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); return res.end(); }
   const base = path.basename(p);

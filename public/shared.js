@@ -12,61 +12,58 @@
   const PORTAL_RADIUS = 0.9;
   const FLING = 15;             // tiles/sec shove when a vortex spits you out
 
-  const CYAN = '#38e8ff', PINK = '#ff4fd8', ORANGE = '#ffa43a', LIME = '#9dff4f';
+  const CYAN = '#38e8ff', PINK = '#ff4fd8', ORANGE = '#ffa43a'; // (kept for portal maps)
 
+  // Each map has exactly ONE hazard: whirlpools, mud, or boost lanes. (Portals still work in the code if you want a map with them.)
+  // theme = how it looks (see themes.js). Mud zones can be ovals (shape: 'ellipse', x/y/w/h = the oval's bounding box).
   const MAPS = {
-    portals: {
-      id: 'portals', name: 'Portal Park', icon: '🌀', ground: '#16212e', accent: CYAN,
-      desc: 'Hop between linked portals and zip across the map on boost lanes.',
-      portals: [
-        { id: 'a1', x: 9.5, y: 9.5, to: 'a2', color: CYAN }, { id: 'a2', x: 54.5, y: 54.5, to: 'a1', color: CYAN },
-        { id: 'b1', x: 54.5, y: 9.5, to: 'b2', color: PINK }, { id: 'b2', x: 9.5, y: 54.5, to: 'b1', color: PINK },
-        { id: 'c1', x: 32, y: 19.5, to: 'c2', color: ORANGE }, { id: 'c2', x: 32, y: 44.5, to: 'c1', color: ORANGE },
-      ],
-      vortexes: [],
-      zones: [
-        { type: 'speed', x: 20, y: 31, w: 24, h: 2, dir: 'x+' },
-        { type: 'speed', x: 31, y: 4, w: 2, h: 10, dir: 'y+' },
-        { type: 'speed', x: 31, y: 50, w: 2, h: 10, dir: 'y-' },
-      ],
-    },
-    vortex: {
-      id: 'vortex', name: 'Vortex Valley', icon: '🌪️', ground: '#142620', accent: '#b07bff',
-      desc: 'Giant whirlpools drag you in. Use the boost lanes to escape.',
+    ocean: {
+      id: 'ocean', theme: 'ocean', name: 'Whirlpool Reef', icon: '🌊', ground: '#1d6f8c', accent: '#7fe3ff', tag: '🌊 Giant whirlpools',
+      desc: 'A coral reef with giant whirlpools. They drag you in and spit you out.',
       portals: [],
       vortexes: [
-        { x: 32, y: 32, r: 9, pull: 5.5 },
-        { x: 13, y: 15, r: 6, pull: 4.5 },
-        { x: 51, y: 49, r: 6, pull: 4.5 },
+        { x: 32, y: 32, r: 9.5, pull: 5.5 },
+        { x: 13, y: 16, r: 6.5, pull: 4.5 },
+        { x: 51, y: 49, r: 6.5, pull: 4.5 },
+        { x: 50, y: 13, r: 5, pull: 4 },
       ],
+      zones: [],
+    },
+    swamp: {
+      id: 'swamp', theme: 'swamp', name: 'Misty Bog', icon: '🐸', ground: '#36532c', accent: '#ffd966', tag: '🟤 Sticky mud ponds',
+      desc: 'A foggy bog full of mud ponds that halve your speed. Go around or wade through.',
+      portals: [], vortexes: [],
       zones: [
-        { type: 'slow', x: 38, y: 6, w: 14, h: 8 },
-        { type: 'slow', x: 12, y: 50, w: 14, h: 8 },
-        { type: 'speed', x: 44, y: 30, w: 16, h: 4, dir: 'x+' },
-        { type: 'speed', x: 4, y: 30, w: 16, h: 4, dir: 'x-' },
+        { type: 'slow', shape: 'ellipse', x: 8, y: 26, w: 20, h: 14 },
+        { type: 'slow', shape: 'ellipse', x: 38, y: 8, w: 18, h: 12 },
+        { type: 'slow', shape: 'ellipse', x: 36, y: 40, w: 20, h: 14 },
+        { type: 'slow', shape: 'ellipse', x: 6, y: 6, w: 10, h: 8 },
+        { type: 'slow', shape: 'ellipse', x: 24, y: 52, w: 12, h: 8 },
+        { type: 'slow', shape: 'ellipse', x: 46, y: 26, w: 10, h: 8 },
       ],
     },
-    chaos: {
-      id: 'chaos', name: 'Chaos Circuit', icon: '🏁', ground: '#251a2e', accent: PINK,
-      desc: 'A racetrack of boost lanes, mud pits, a vortex and wrap-around portals.',
-      portals: [
-        { id: 'a1', x: 3.5, y: 32, to: 'a2', color: PINK }, { id: 'a2', x: 60.5, y: 32, to: 'a1', color: PINK },
-        { id: 'b1', x: 32, y: 3.5, to: 'b2', color: CYAN }, { id: 'b2', x: 32, y: 60.5, to: 'b1', color: CYAN },
-      ],
-      vortexes: [{ x: 32, y: 32, r: 7, pull: 4.5 }],
+    canyon: {
+      id: 'canyon', theme: 'canyon', name: 'Canyon Dash', icon: '🏜️', ground: '#c9a56a', accent: '#ffd23f', tag: '⚡ Boost lanes',
+      desc: 'A desert racetrack of boost lanes. Run WITH the arrows, never against them.',
+      portals: [], vortexes: [],
       zones: [
         { type: 'speed', x: 12, y: 11, w: 40, h: 2, dir: 'x+' },
         { type: 'speed', x: 50, y: 13, w: 2, h: 38, dir: 'y+' },
         { type: 'speed', x: 12, y: 51, w: 40, h: 2, dir: 'x-' },
         { type: 'speed', x: 12, y: 13, w: 2, h: 38, dir: 'y-' },
-        { type: 'slow', x: 18, y: 18, w: 8, h: 8 }, { type: 'slow', x: 38, y: 18, w: 8, h: 8 },
-        { type: 'slow', x: 18, y: 38, w: 8, h: 8 }, { type: 'slow', x: 38, y: 38, w: 8, h: 8 },
+        { type: 'speed', x: 31, y: 19, w: 2, h: 8, dir: 'y-' },
+        { type: 'speed', x: 31, y: 37, w: 2, h: 8, dir: 'y+' },
+        { type: 'speed', x: 19, y: 31, w: 8, h: 2, dir: 'x-' },
+        { type: 'speed', x: 37, y: 31, w: 8, h: 2, dir: 'x+' },
       ],
     },
   };
   const MAP_IDS = Object.keys(MAPS);
 
-  const inRect = (z, x, y) => x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h;
+  const inRect = (z, x, y) => {
+    if (z.shape === 'ellipse') { const rx = z.w / 2, ry = z.h / 2, dx = (x - z.x - rx) / rx, dy = (y - z.y - ry) / ry; return dx * dx + dy * dy < 1; }
+    return x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h;
+  };
   const LANE_VEC = { 'x+': [1, 0], 'x-': [-1, 0], 'y+': [0, 1], 'y-': [0, -1] };
   // A boost lane only helps when you run WITH it: full boost going along it, half speed going against it,
   // normal speed when crossing it sideways (smoothly blended for diagonals). ux,uy = your unit direction.
